@@ -55,18 +55,28 @@ public class DisplayBrightnessTests
     }
 
     [Fact]
-    public void TheMonitorLabelShowsThePositionOnlyWhenThereIsAChoice()
+    public void TheBadgeShowsThePositionOnlyWhenThereIsAChoice()
     {
-        Assert.Equal("Odyssey G95NC", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 1)));
-        Assert.Equal("Odyssey G95NC  1/2", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 2)));
-        Assert.Equal("DELL U2723QE  2/2", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("DELL U2723QE", 40, false, true, 1, 2)));
+        Assert.Equal("", DisplayBrightnessRenderer.MonitorBadge(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 1)));
+        Assert.Equal("1/2", DisplayBrightnessRenderer.MonitorBadge(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 2)));
+        Assert.Equal("2/2", DisplayBrightnessRenderer.MonitorBadge(new DisplayBrightnessSnapshot("SF10T", 10, false, true, 1, 2)));
+        Assert.Equal("", DisplayBrightnessRenderer.MonitorBadge(DisplayBrightnessSnapshot.Unavailable with { Count = 2 }));
+
+        // The name row itself carries only the name, so it stays left-aligned and unchanged.
+        Assert.Equal("Odyssey G95NC", DisplayBrightnessRenderer.Render(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 2), "tile").Artist);
     }
 
     [Fact]
-    public void NextMonitorIsRefusedWithOneMonitorOrBeforeBinding()
+    public void BeforeBindingNothingResolvesAndNothingNeighbours()
     {
         using var service = new DisplayBrightnessService();
-        Assert.False(service.NextMonitor(), "nothing is bound yet");
+        Assert.Null(service.Resolve(null));
+        Assert.Null(service.Resolve("Odyssey G95NC"));
+        Assert.Null(service.Neighbor(null, 1));
+        Assert.Equal(DisplayBrightnessSnapshot.Unavailable, service.Get(null));
+        Assert.Equal("DELL U2723QE not connected", service.Get("DELL U2723QE").Name);
+        Assert.False(service.Adjust(null, 2));
+        Assert.False(service.Toggle("anything"));
     }
 
     [Fact]

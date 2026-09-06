@@ -25,33 +25,56 @@ internal static class PropertyInspectorBridge
         connection.OnSendToPlugin += (_, e) => Handle(connection, e.Event);
     }
 
+    /// <summary>Name of the sdpi-select data source listing monitors that answer DDC/CI.</summary>
+    public const string MonitorsDataSource = "monitors";
+
     private static void Handle(ISDConnection connection, SendToPlugin request)
     {
         var name = request.Payload?["event"]?.ToString();
-        if (name != SessionsDataSource)
+        switch (name)
         {
-            return;
-        }
-
-        var items = new JArray
-        {
-            new JObject { ["label"] = "Automatic (follow Windows)", ["value"] = AutomaticValue },
-        };
-        foreach (var appId in MediaHub.KnownAppIds)
-        {
-            items.Add(new JObject
+            case SessionsDataSource:
             {
-                ["label"] = $"{FeedbackRenderer.AppDisplayName(appId)}  ({appId})",
-                ["value"] = appId,
-            });
-        }
+                var items = new JArray
+                {
+                    new JObject { ["label"] = "Automatic (follow Windows)", ["value"] = AutomaticValue },
+                };
+                foreach (var appId in MediaHub.KnownAppIds)
+                {
+                    items.Add(new JObject
+                    {
+                        ["label"] = $"{FeedbackRenderer.AppDisplayName(appId)}  ({appId})",
+                        ["value"] = appId,
+                    });
+                }
 
+                Reply(connection, SessionsDataSource, items);
+                break;
+            }
+
+            case MonitorsDataSource:
+            {
+                var items = new JArray
+                {
+                    new JObject { ["label"] = "Automatic (primary monitor)", ["value"] = AutomaticValue },
+                };
+                foreach (var monitor in DisplayBrightnessHub.MonitorNames)
+                {
+                    items.Add(new JObject { ["label"] = monitor, ["value"] = monitor });
+                }
+
+                Reply(connection, MonitorsDataSource, items);
+                break;
+            }
+        }
+    }
+
+    private static void Reply(ISDConnection connection, string dataSource, JArray items) =>
         _ = connection.SendToPropertyInspectorAsync(new JObject
         {
-            ["event"] = SessionsDataSource,
+            ["event"] = dataSource,
             ["items"] = items,
         });
-    }
 
     /// <summary>The preferred app id from global settings, or null for automatic.</summary>
     public static string? PreferredAppFrom(JObject? globalSettings)

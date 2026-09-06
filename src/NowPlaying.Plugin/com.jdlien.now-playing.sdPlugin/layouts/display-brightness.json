@@ -12,12 +12,23 @@
     {
       "key": "artist",
       "type": "text",
-      "rect": [ 46, 7, 150, 26 ],
+      "rect": [ 46, 7, 116, 26 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis",
       "color": "lightGray",
+      "value": ""
+    },
+    {
+      "key": "badge",
+      "type": "text",
+      "rect": [ 164, 10, 32, 22 ],
+      "zOrder": 1,
+      "alignment": "right",
+      "font": { "size": 13, "weight": 400 },
+      "text-overflow": "clip",
+      "color": "#8c8c92",
       "value": ""
     },
     {

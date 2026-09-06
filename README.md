@@ -58,11 +58,13 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   level; a glow rather than black so the deck never looks dead.
   Talks to the hardware directly, because the plugin protocol has no
   brightness command (see 5.10).
-- **Display Brightness**, a fifth action for a dial: the primary monitor's
-  brightness over DDC/CI, with the monitor's real name from its EDID on the
-  top row. Turn to adjust (2% default), press or tap to dim to the monitor's
-  minimum and back. Changes made on the monitor's own menu are picked up by
-  a periodic re-read (see 5.11).
+- **Display Brightness**, a fifth action for a dial: one monitor's brightness
+  over DDC/CI, with the monitor's real name from its EDID on the top row.
+  Each dial picks its own monitor, so two dials can serve two monitors. Turn
+  to adjust (2% default); press, tap, and hold are separately configurable
+  between dim and restore, next monitor, previous monitor, and nothing.
+  Changes made on the monitor's own menu are picked up by a periodic re-read
+  (see 5.11).
 
 ## 2. Verified environment
 
@@ -527,14 +529,21 @@ percent.
 - **Dim toggle** goes to the monitor's minimum (0%), which on a monitor is a
   dim backlight rather than black; un-dimming from a level of 0 restores to
   30%. Adjusting while dimmed un-dims.
-- **More than one monitor.** Every monitor that answers DDC/CI is kept; the
-  primary is selected first, or the remembered one from global settings
-  (`displayMonitor`). The top row shows "Name 1/2" when there is a choice.
-  The press can be set to "next monitor" instead of dim, and a long touch
-  always cycles. A monitor that does not answer DDC/CI is dropped from the
-  list; with none, the strip shows "No DDC/CI monitor" and every command
-  alerts. Cycling is unit tested but not yet tried on real hardware; this
-  machine has one monitor.
+- **More than one monitor: every dial binds to its own.** The service drives
+  every monitor that answers DDC/CI at once, one channel of state per
+  monitor on the one worker. Each dial instance has a `monitor` setting,
+  "automatic" (the primary) or a name picked from a live list in the
+  inspector, so two dials can serve two monitors. "Next" and "previous"
+  gestures move that dial's own binding through the list, wrapping, and
+  remember it in the action's settings. A small right-aligned "1/2" badge
+  at the end of the name row, dimmer and smaller than the name, shows the
+  position whenever there is a choice; it is the layout's seventh item so
+  the name stays left-aligned. A dimmed monitor keeps its remembered level
+  across a re-bind. A monitor that does not answer DDC/CI is left out; a
+  named one that is unplugged shows "Name not connected", and with none the
+  strip shows "No DDC/CI monitor" and every command alerts. Measured
+  2026-09-06 with two monitors: Odyssey G95NC on 0..50 and a Samsung SF10T
+  on 0..100, both answering, the primary written independently.
 
 Known limits to test: HDR mode locks brightness on many monitors, some ship
 with DDC/CI off in their menu, and USB-C docks and KVMs can drop it.
@@ -694,8 +703,8 @@ Display brightness dial:
 | Event | Behaviour |
 | --- | --- |
 | `dialRotate` | Level moves by `ticks` times the step (default 2%); the strip updates at once and the worker writes the latest value to the monitor. Adjusting while dimmed un-dims. Rotation while pressed is ignored. |
-| `dialDown` | Per setting: toggle between the monitor's minimum and the remembered level (default), or select the next monitor. `dialUp` ignored. |
-| `touchTap` | Short tap does what the press does; a hold always selects the next monitor. With one monitor, "next" shows the alert. |
+| `dialDown` | Runs the press gesture. `dialUp` ignored. |
+| `touchTap` | A short tap runs the tap gesture, a hold runs the hold gesture. Press, tap, and hold are separate events and each is its own setting: dim and restore, next monitor, previous monitor, or nothing. Defaults: press dims, tap goes next, hold goes previous. With one monitor, next and previous show the alert. |
 
 Key action:
 
@@ -852,9 +861,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
 
 1. foobar2000 progress: accept no bar (v1 default), or add per-app position
    reads through its `foo_beefweb` HTTP API later?
-2. Later candidates, not planned: long-touch or press-and-rotate mapped to
-   seek, a luminance-aware glyph colour on the art, a proper plugin icon and
-   Marketplace listing assets (section 13).
+2. Later candidates, not planned: separate press, tap, and hold gestures on
+   the media dial (the events allow it; left and right tap zones for previous
+   and next were considered and set aside as too cryptic without a visual
+   hint), tapping the progress bar to seek on players that allow it,
+   press-and-rotate, a luminance-aware glyph colour on the art, a proper
+   plugin icon and Marketplace listing assets (section 13).
 3. Pressing with no session: today the command is rejected and the action
    shows the alert triangle, because the media API can only control sessions
    that exist. Left as is on 2026-09-06 pending real use. If it becomes a

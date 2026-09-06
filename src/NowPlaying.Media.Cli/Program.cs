@@ -237,10 +237,10 @@ internal static class Program
 
         using var service = new NowPlaying.Device.DisplayBrightnessService(message => Console.Error.WriteLine($"[ddc] {message}"));
         var done = new TaskCompletionSource<NowPlaying.Device.DisplayBrightnessSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
-        service.Changed += s =>
+        service.Changed += (_, s) =>
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] display  {s.Level,3}%  {(s.Dimmed ? "dimmed" : "on    ")}  {s.Name}");
-            if (s.Available)
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] display  {s.Level,3}%  {(s.Dimmed ? "dimmed" : "on    ")}  {s.Name} ({s.Index + 1}/{s.Count})");
+            if (s.Available && s.Index == 0)
             {
                 done.TrySetResult(s);
             }
@@ -254,8 +254,8 @@ internal static class Program
             return 0;
         }
 
-        Console.WriteLine($"adjusting by {delta:+#;-#;0} to {target}%");
-        service.Adjust(delta);
+        Console.WriteLine($"adjusting primary by {delta:+#;-#;0} to {target}%");
+        service.Adjust(null, delta);
         await Task.Delay(2500); // let the write land and the bus settle before reading back
         var check = NowPlaying.Device.MonitorConfiguration.Enumerate();
         try

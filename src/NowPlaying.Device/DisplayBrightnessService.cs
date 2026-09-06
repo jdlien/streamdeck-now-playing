@@ -1,11 +1,11 @@
 namespace NowPlaying.Device;
 
-/// <summary>The selected monitor's brightness as the plugin knows it.</summary>
+/// <summary>One monitor's brightness as the plugin knows it.</summary>
 /// <param name="Name">The monitor's name from its EDID, or the driver's description.</param>
 /// <param name="Level">Brightness as a percent of the monitor's own range; the level to restore when dimmed.</param>
 /// <param name="Dimmed">Whether the toggle has taken the monitor to its minimum without forgetting the level.</param>
-/// <param name="Available">False when no monitor answers DDC/CI.</param>
-/// <param name="Index">Position of the selected monitor among those that answer, 0-based.</param>
+/// <param name="Available">False when this monitor does not answer DDC/CI or is not connected.</param>
+/// <param name="Index">Position among the monitors that answer, 0-based, primary first.</param>
 /// <param name="Count">How many monitors answer DDC/CI.</param>
 public sealed record DisplayBrightnessSnapshot(string Name, int Level, bool Dimmed, bool Available, int Index = 0, int Count = 0)
 {
@@ -16,14 +16,16 @@ public sealed record DisplayBrightnessSnapshot(string Name, int Level, bool Dimm
 }
 
 /// <summary>
-/// Brightness of one monitor over DDC/CI, with the choice of monitor.
+/// Brightness of every monitor that answers DDC/CI, addressed by name. Each
+/// dial binds to a monitor (or to "automatic", the primary) and reads and
+/// writes its own; the service drives them all from one worker.
 ///
 /// DDC/CI is slow and moody: a transaction takes tens of milliseconds, the
 /// monitor may not acknowledge for a while after a write, and Windows
-/// invalidates handles on display changes. So a dedicated worker applies only
-/// the latest requested value (a fast spin costs one or two writes, not a
-/// queue), reads never follow a write directly, and failures schedule a
-/// re-bind with backoff rather than an immediate retry.
+/// invalidates handles on display changes. So the worker applies only the
+/// latest requested value per monitor (a fast spin costs one or two writes,
+/// not a queue), reads never follow a write directly, and failures schedule
+/// a re-bind with backoff rather than an immediate retry.
 /// </summary>
 public sealed class DisplayBrightnessService : IDisposable
 {
@@ -31,6 +33,7 @@ public sealed class DisplayBrightnessService : IDisposable
     public const int RestoreFloor = 30;
 
     private static readonly TimeSpan ReadInterval = TimeSpan.FromSeconds(30);
+
     /// <summary>
     /// No reads this soon after a write: the Odyssey G95NC refused reads for a
     /// couple of seconds after a write and once returned the old value, which
@@ -44,18 +47,10 @@ public sealed class DisplayBrightnessService : IDisposable
     private readonly Action<string>? _log;
     private readonly AutoResetEvent _wake = new(false);
     private readonly Thread _worker;
-    private readonly List<PhysicalMonitor> _monitors = new();
-    private int _index = -1;
-    private uint _min;
-    private uint _max;
-    private string? _preferredName;
-    private DisplayBrightnessSnapshot _current = DisplayBrightnessSnapshot.Unavailable;
-    private int _pendingPercent = -1;
-    private int _pendingSelect = -1;
+    private readonly List<Channel> _channels = new(); // primary first
     private bool _rebindRequested;
     private bool _readRequested;
     private int _failures;
-    private DateTime _lastWriteUtc = DateTime.MinValue;
     private Timer? _readTimer;
     private Timer? _rebindTimer;
     private bool _disposed;
@@ -66,38 +61,63 @@ public sealed class DisplayBrightnessService : IDisposable
         _worker = new Thread(Run) { IsBackground = true, Name = "display-brightness" };
     }
 
-    public DisplayBrightnessSnapshot Current
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _current;
-            }
-        }
-    }
+    /// <summary>Raised on the worker thread when one monitor's snapshot changes.</summary>
+    public event Action<string, DisplayBrightnessSnapshot>? Changed;
 
-    /// <summary>Raised on the worker thread whenever the snapshot changes.</summary>
-    public event Action<DisplayBrightnessSnapshot>? Changed;
+    /// <summary>Raised on the worker thread when the set of monitors changed (after every bind).</summary>
+    public event Action? MonitorsChanged;
 
-    /// <summary>Names of the monitors that answered DDC/CI at the last bind, in selection order.</summary>
+    /// <summary>Names of the monitors that answer DDC/CI, primary first.</summary>
     public IReadOnlyList<string> MonitorNames
     {
         get
         {
             lock (_gate)
             {
-                return _monitors.Select(m => m.Name).ToArray();
+                return _channels.Select(c => c.State.Name).ToArray();
             }
         }
     }
 
-    /// <summary>The monitor to select at bind when present; otherwise the primary. Null clears the preference.</summary>
-    public void SetPreferredMonitor(string? name)
+    /// <summary>The actual monitor a binding refers to: null or empty means the primary. Null when nothing matches.</summary>
+    public string? Resolve(string? name)
     {
         lock (_gate)
         {
-            _preferredName = string.IsNullOrWhiteSpace(name) ? null : name;
+            return Find(name)?.State.Name;
+        }
+    }
+
+    /// <summary>The snapshot for a binding; an unavailable one when the monitor is absent.</summary>
+    public DisplayBrightnessSnapshot Get(string? name)
+    {
+        lock (_gate)
+        {
+            var channel = Find(name);
+            if (channel is not null)
+            {
+                return channel.State;
+            }
+
+            return string.IsNullOrEmpty(name)
+                ? DisplayBrightnessSnapshot.Unavailable
+                : DisplayBrightnessSnapshot.Unavailable with { Name = $"{name} not connected" };
+        }
+    }
+
+    /// <summary>The monitor after (+1) or before (-1) the given binding in the list, wrapping. Null when there is nothing to move to.</summary>
+    public string? Neighbor(string? name, int direction)
+    {
+        lock (_gate)
+        {
+            if (_channels.Count < 2)
+            {
+                return null;
+            }
+
+            var index = Math.Max(0, _channels.FindIndex(c => c == Find(name)));
+            var count = _channels.Count;
+            return _channels[((index + direction) % count + count) % count].State.Name;
         }
     }
 
@@ -129,68 +149,31 @@ public sealed class DisplayBrightnessService : IDisposable
         _wake.Set();
     }
 
-    /// <summary>Move the level by <paramref name="delta"/> percent, un-dimming if dimmed. False when no monitor is available.</summary>
-    public bool Adjust(int delta)
+    /// <summary>Move a monitor's level by <paramref name="delta"/> percent, un-dimming if dimmed. False when it is not available.</summary>
+    public bool Adjust(string? name, int delta) => Change(name, s => s with { Level = Math.Clamp(s.Level + delta, 0, 100), Dimmed = false });
+
+    /// <summary>Toggle a monitor between its minimum and the remembered level.</summary>
+    public bool Toggle(string? name) => Change(name, s => s.Dimmed
+        ? s with { Level = s.Level == 0 ? RestoreFloor : s.Level, Dimmed = false }
+        : s with { Dimmed = true });
+
+    private bool Change(string? name, Func<DisplayBrightnessSnapshot, DisplayBrightnessSnapshot> change)
     {
         DisplayBrightnessSnapshot next;
         lock (_gate)
         {
-            if (!_current.Available)
+            var channel = Find(name);
+            if (channel is null)
             {
                 return false;
             }
 
-            next = _current with { Level = Math.Clamp(_current.Level + delta, 0, 100), Dimmed = false };
-            _current = next;
-            _pendingPercent = next.Effective;
+            next = change(channel.State);
+            channel.State = next;
+            channel.Pending = next.Effective;
         }
 
-        Changed?.Invoke(next);
-        _wake.Set();
-        return true;
-    }
-
-    /// <summary>Toggle between the monitor's minimum and the remembered level.</summary>
-    public bool Toggle()
-    {
-        DisplayBrightnessSnapshot next;
-        lock (_gate)
-        {
-            if (!_current.Available)
-            {
-                return false;
-            }
-
-            next = _current.Dimmed
-                ? _current with { Level = _current.Level == 0 ? RestoreFloor : _current.Level, Dimmed = false }
-                : _current with { Dimmed = true };
-            _current = next;
-            _pendingPercent = next.Effective;
-        }
-
-        Changed?.Invoke(next);
-        _wake.Set();
-        return true;
-    }
-
-    /// <summary>
-    /// Select the next monitor that answers DDC/CI, wrapping around. False
-    /// when there is nothing to cycle to. The read of the new monitor happens
-    /// on the worker; the snapshot changes when it lands.
-    /// </summary>
-    public bool NextMonitor()
-    {
-        lock (_gate)
-        {
-            if (_monitors.Count < 2 || _index < 0)
-            {
-                return false;
-            }
-
-            _pendingSelect = (_index + 1) % _monitors.Count;
-            _pendingPercent = -1; // a level requested for the old monitor is not for the new one
-        }
-
+        Changed?.Invoke(next.Name, next);
         _wake.Set();
         return true;
     }
@@ -212,6 +195,22 @@ public sealed class DisplayBrightnessService : IDisposable
         }
 
         _wake.Set();
+    }
+
+    /// <summary>Caller holds the gate. Empty or null means the primary.</summary>
+    private Channel? Find(string? name)
+    {
+        if (_channels.Count == 0)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(name))
+        {
+            return _channels[0];
+        }
+
+        return _channels.FirstOrDefault(c => string.Equals(c.State.Name, name, StringComparison.OrdinalIgnoreCase));
     }
 
     // -- scheduling ---------------------------------------------------------
@@ -265,7 +264,6 @@ public sealed class DisplayBrightnessService : IDisposable
             _wake.WaitOne();
 
             bool rebind;
-            int select;
             lock (_gate)
             {
                 if (_disposed)
@@ -275,45 +273,41 @@ public sealed class DisplayBrightnessService : IDisposable
 
                 rebind = _rebindRequested;
                 _rebindRequested = false;
-                select = _pendingSelect;
-                _pendingSelect = -1;
             }
 
-            if (rebind || _index < 0)
+            if (rebind)
             {
                 Bind();
             }
-            else if (select >= 0)
+
+            // Apply the latest requested value on every monitor that has one.
+            var wroteAny = false;
+            foreach (var channel in Snapshot())
             {
-                Select(select);
+                while (true)
+                {
+                    int percent;
+                    lock (_gate)
+                    {
+                        percent = channel.Pending;
+                        channel.Pending = -1;
+                    }
+
+                    if (percent < 0)
+                    {
+                        break;
+                    }
+
+                    wroteAny |= Write(channel, percent);
+                }
             }
 
-            // Apply the latest requested value, repeating only if another arrived meanwhile.
-            var wrote = false;
-            while (true)
-            {
-                int percent;
-                lock (_gate)
-                {
-                    percent = _pendingPercent;
-                    _pendingPercent = -1;
-                }
-
-                if (percent < 0)
-                {
-                    break;
-                }
-
-                wrote |= Write(percent);
-            }
-
-            // Reads only when the timer asked, never on the heels of a write.
+            // Reads only when the timer asked, and never on the heels of a write to that monitor.
             bool read;
             lock (_gate)
             {
-                read = _readRequested && !wrote && !rebind && select < 0 && _pendingPercent < 0
-                    && DateTime.UtcNow - _lastWriteUtc >= QuietAfterWrite;
-                if (read || wrote || rebind)
+                read = _readRequested && !rebind;
+                if (read || wroteAny || rebind)
                 {
                     _readRequested = false;
                 }
@@ -321,11 +315,31 @@ public sealed class DisplayBrightnessService : IDisposable
 
             if (read)
             {
-                ReadAndPublish();
+                foreach (var channel in Snapshot())
+                {
+                    bool quiet;
+                    lock (_gate)
+                    {
+                        quiet = channel.Pending < 0 && DateTime.UtcNow - channel.LastWriteUtc >= QuietAfterWrite;
+                    }
+
+                    if (quiet)
+                    {
+                        ReadAndPublish(channel);
+                    }
+                }
             }
         }
 
-        ReleaseMonitors();
+        ReleaseAll();
+    }
+
+    private List<Channel> Snapshot()
+    {
+        lock (_gate)
+        {
+            return _channels.ToList();
+        }
     }
 
     private void Bind()
@@ -340,22 +354,27 @@ public sealed class DisplayBrightnessService : IDisposable
         }
         catch (Exception ex)
         {
-            ReleaseMonitors();
-            Publish(DisplayBrightnessSnapshot.Unavailable);
+            ReleaseAll();
+            MonitorsChanged?.Invoke();
             ScheduleRebind($"monitor enumeration failed: {ex.Message}");
             return;
         }
 
-        ReleaseMonitors();
+        var previous = ReleaseAll();
 
-        // Keep only monitors that answer DDC/CI; the others' handles go straight back.
-        var answering = new List<PhysicalMonitor>();
+        var channels = new List<Channel>();
         foreach (var monitor in found)
         {
             try
             {
-                MonitorConfiguration.ReadBrightness(monitor.Handle);
-                answering.Add(monitor);
+                var (min, current, max) = MonitorConfiguration.ReadBrightness(monitor.Handle);
+                var percent = MonitorConfiguration.ToPercent(min, current, max);
+                var old = previous.FirstOrDefault(c => string.Equals(c.State.Name, monitor.Name, StringComparison.OrdinalIgnoreCase));
+                // A monitor we had dimmed still reads as its minimum after a re-bind; keep the remembered level.
+                var state = old is { State.Dimmed: true } && percent == 0
+                    ? old.State
+                    : new DisplayBrightnessSnapshot(monitor.Name, percent, false, true);
+                channels.Add(new Channel(monitor) { Min = min, Max = max, State = state });
             }
             catch (Exception ex)
             {
@@ -364,91 +383,46 @@ public sealed class DisplayBrightnessService : IDisposable
             }
         }
 
-        string? preferred;
+        for (var i = 0; i < channels.Count; i++)
+        {
+            channels[i].State = channels[i].State with { Index = i, Count = channels.Count };
+        }
+
         lock (_gate)
         {
-            _monitors.Clear();
-            _monitors.AddRange(answering);
-            preferred = _preferredName;
-        }
-
-        if (answering.Count == 0)
-        {
-            Publish(DisplayBrightnessSnapshot.Unavailable);
-            ScheduleRebind("no monitor answers DDC/CI");
-            return;
-        }
-
-        var index = preferred is null ? -1 : answering.FindIndex(m => string.Equals(m.Name, preferred, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
-        {
-            index = Math.Max(0, answering.FindIndex(m => m.IsPrimary));
-        }
-
-        _log?.Invoke($"{answering.Count} monitor(s) answer DDC/CI: {string.Join(", ", answering.Select(m => m.Name))}");
-        Select(index);
-    }
-
-    /// <summary>Make monitor <paramref name="index"/> current and publish its brightness. Worker thread only.</summary>
-    private void Select(int index)
-    {
-        PhysicalMonitor monitor;
-        int count;
-        lock (_gate)
-        {
-            if (index < 0 || index >= _monitors.Count)
-            {
-                return;
-            }
-
-            monitor = _monitors[index];
-            count = _monitors.Count;
-        }
-
-        try
-        {
-            var (min, current, max) = MonitorConfiguration.ReadBrightness(monitor.Handle);
-            _min = min;
-            _max = max;
-            _index = index;
-            lock (_gate)
+            _channels.Clear();
+            _channels.AddRange(channels);
+            if (channels.Count > 0)
             {
                 _failures = 0;
             }
-
-            var percent = MonitorConfiguration.ToPercent(min, current, max);
-            _log?.Invoke($"selected {monitor.Name} ({monitor.GdiDeviceName}): {current} of {min}..{max} = {percent}%");
-            Publish(new DisplayBrightnessSnapshot(monitor.Name, percent, false, true, index, count));
         }
-        catch (Exception ex)
-        {
-            ScheduleRebind($"{monitor.Name} stopped answering: {ex.Message}");
-        }
-    }
 
-    private PhysicalMonitor? Selected()
-    {
-        lock (_gate)
+        _log?.Invoke(channels.Count == 0
+            ? "no monitor answers DDC/CI"
+            : $"{channels.Count} monitor(s) answer DDC/CI: {string.Join(", ", channels.Select(c => $"{c.State.Name} {c.State.Level}%"))}");
+
+        MonitorsChanged?.Invoke();
+        foreach (var channel in channels)
         {
-            return _index >= 0 && _index < _monitors.Count ? _monitors[_index] : null;
+            Changed?.Invoke(channel.State.Name, channel.State);
+        }
+
+        if (channels.Count == 0)
+        {
+            ScheduleRebind("no monitor answers DDC/CI");
         }
     }
 
     /// <summary>True when the value reached the monitor.</summary>
-    private bool Write(int percent)
+    private bool Write(Channel channel, int percent)
     {
-        var monitor = Selected();
-        if (monitor is null)
-        {
-            return false;
-        }
-
         try
         {
-            MonitorConfiguration.WriteBrightness(monitor.Handle, MonitorConfiguration.ToUnits(_min, _max, percent));
+            MonitorConfiguration.WriteBrightness(channel.Monitor.Handle, MonitorConfiguration.ToUnits(channel.Min, channel.Max, percent));
             lock (_gate)
             {
-                _lastWriteUtc = DateTime.UtcNow;
+                channel.LastWriteUtc = DateTime.UtcNow;
                 _failures = 0;
             }
 
@@ -456,74 +430,64 @@ public sealed class DisplayBrightnessService : IDisposable
         }
         catch (Exception ex)
         {
-            ScheduleRebind($"write {percent}% to {monitor.Name} failed: {ex.Message}");
+            ScheduleRebind($"write {percent}% to {channel.State.Name} failed: {ex.Message}");
             return false;
         }
     }
 
     /// <summary>Periodic read: adopt a level changed on the monitor's own menu, and drop the dim state if someone raised it there.</summary>
-    private void ReadAndPublish()
+    private void ReadAndPublish(Channel channel)
     {
-        var monitor = Selected();
-        if (monitor is null)
-        {
-            return;
-        }
-
         try
         {
-            var (min, current, max) = MonitorConfiguration.ReadBrightness(monitor.Handle);
-            _min = min;
-            _max = max;
+            var (min, current, max) = MonitorConfiguration.ReadBrightness(channel.Monitor.Handle);
             var percent = MonitorConfiguration.ToPercent(min, current, max);
 
             DisplayBrightnessSnapshot next;
             lock (_gate)
             {
+                channel.Min = min;
+                channel.Max = max;
                 _failures = 0;
-                if (_pendingPercent >= 0 || _pendingSelect >= 0 || percent == _current.Effective)
+                if (channel.Pending >= 0 || percent == channel.State.Effective)
                 {
                     return;
                 }
 
-                next = _current with { Level = percent, Dimmed = false };
-                _current = next;
+                next = channel.State with { Level = percent, Dimmed = false };
+                channel.State = next;
             }
 
-            _log?.Invoke($"{monitor.Name} reports {percent}% (changed elsewhere)");
-            Changed?.Invoke(next);
+            _log?.Invoke($"{next.Name} reports {percent}% (changed elsewhere)");
+            Changed?.Invoke(next.Name, next);
         }
         catch (Exception ex)
         {
-            ScheduleRebind($"read from {monitor.Name} failed: {ex.Message}");
+            ScheduleRebind($"read from {channel.State.Name} failed: {ex.Message}");
         }
     }
 
-    private void Publish(DisplayBrightnessSnapshot snapshot)
+    /// <summary>Drop every channel and release its handle; returns what was dropped so state can be carried over.</summary>
+    private List<Channel> ReleaseAll()
     {
+        List<Channel> channels;
         lock (_gate)
         {
-            if (snapshot == _current)
-            {
-                return;
-            }
-
-            _current = snapshot;
+            channels = _channels.ToList();
+            _channels.Clear();
         }
 
-        Changed?.Invoke(snapshot);
+        MonitorConfiguration.Destroy(channels.Select(c => c.Monitor));
+        return channels;
     }
 
-    private void ReleaseMonitors()
+    private sealed class Channel(PhysicalMonitor monitor)
     {
-        List<PhysicalMonitor> monitors;
-        lock (_gate)
-        {
-            monitors = _monitors.ToList();
-            _monitors.Clear();
-            _index = -1;
-        }
-
-        MonitorConfiguration.Destroy(monitors);
+        public PhysicalMonitor Monitor { get; } = monitor;
+        public uint Min;
+        public uint Max;
+        public DisplayBrightnessSnapshot State = DisplayBrightnessSnapshot.Unavailable;
+        public int Pending = -1;
+        public DateTime LastWriteUtc = DateTime.MinValue;
     }
 }

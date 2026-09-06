@@ -6,29 +6,40 @@ using NowPlaying.Device;
 namespace NowPlaying.Plugin;
 
 /// <summary>
-/// The display brightness dial, in the shared layout: a monitor's brightness
-/// over DDC/CI. Turn to adjust; press or tap either dims to the monitor's
-/// minimum and back or selects the next monitor, per setting; a long touch
-/// always selects the next monitor. The strip shows the requested level at
-/// once; the monitor catches up a round trip later.
+/// The display brightness dial, in the shared layout: one monitor's
+/// brightness over DDC/CI. Each instance binds to a monitor of its own
+/// (automatic = the primary), so two dials can serve two monitors. Turn to
+/// adjust; press, tap, and hold each run a configurable gesture: dim and
+/// restore, next monitor, previous monitor, or nothing.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.display-brightness")]
 public sealed class DisplayBrightnessAction : EncoderBase
 {
     private const string LayoutPath = "layouts/display-brightness.json";
+    private const string MonitorKey = "monitor";
     private const string StepKey = "step";
     private const string PressKey = "pressAction";
-    private const string PressDim = "dim";
-    private const string PressNext = "next";
+    private const string TapKey = "tapAction";
+    private const string HoldKey = "holdAction";
+    private const string GestureDim = "dim";
+    private const string GestureNext = "next";
+    private const string GesturePrevious = "previous";
+    private const string GestureNone = "none";
     private static readonly string[] Steps = ["1", "2", "5", "10"];
-    private static readonly string[] PressActions = [PressDim, PressNext];
+    private static readonly string[] Gestures = [GestureDim, GestureNext, GesturePrevious, GestureNone];
 
     private readonly object _gate = new();
-    private readonly Action<DisplayBrightnessSnapshot> _onChanged;
+    private readonly Action<string, DisplayBrightnessSnapshot> _onChanged;
+    private readonly Action _onMonitorsChanged;
     private readonly Dictionary<bool, string> _tileCache = new();
+    private JObject _settings = new();
     private FeedbackFrame? _lastFrame;
+    private string? _lastBadge;
+    private string _monitor = ""; // "" = automatic (primary)
     private int _stepPercent = 2;
-    private string _pressAction = PressDim;
+    private string _press = GestureDim;
+    private string _tap = GestureNext;
+    private string _hold = GesturePrevious;
 
     public DisplayBrightnessAction(SDConnection connection, InitialPayload payload)
         : base(connection, payload)
@@ -36,24 +47,38 @@ public sealed class DisplayBrightnessAction : EncoderBase
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness appear: context {connection.ContextId}");
 
         ApplySettings(payload.Settings, writeBackDefaults: true);
+        PropertyInspectorBridge.Attach(connection);
 
-        _onChanged = snapshot =>
+        _onChanged = (name, snapshot) =>
         {
-            Push(snapshot, full: false);
-            if (snapshot.Available)
+            if (string.Equals(name, DisplayBrightnessHub.Resolve(Monitor), StringComparison.OrdinalIgnoreCase))
             {
-                _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.DisplayMonitorKey, snapshot.Name);
+                Push(snapshot, full: false);
             }
         };
+        _onMonitorsChanged = () => Push(Current, full: false);
         DisplayBrightnessHub.Changed += _onChanged;
-        _ = connection.GetGlobalSettingsAsync();
+        DisplayBrightnessHub.MonitorsChanged += _onMonitorsChanged;
         DisplayBrightnessHub.Attach();
 
         connection.OnSystemDidWakeUp += (_, _) => DisplayBrightnessHub.Refresh();
-        connection.OnDeviceDidConnect += (_, _) => Push(DisplayBrightnessHub.Current, full: true);
+        connection.OnDeviceDidConnect += (_, _) => Push(Current, full: true);
 
         _ = ApplyLayoutAndPushAsync();
     }
+
+    private string Monitor
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _monitor;
+            }
+        }
+    }
+
+    private DisplayBrightnessSnapshot Current => DisplayBrightnessHub.Get(Monitor);
 
     private async Task ApplyLayoutAndPushAsync()
     {
@@ -66,7 +91,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] display setFeedbackLayout failed: {ex.Message}");
         }
 
-        Push(DisplayBrightnessHub.Current, full: true);
+        Push(Current, full: true);
     }
 
     // -- input --------------------------------------------------------------
@@ -84,56 +109,76 @@ public sealed class DisplayBrightnessAction : EncoderBase
             step = _stepPercent;
         }
 
-        if (!DisplayBrightnessHub.Adjust(payload.Ticks * step))
+        if (!DisplayBrightnessHub.Adjust(Monitor, payload.Ticks * step))
         {
             _ = Connection.ShowAlert();
         }
     }
 
-    public override void DialDown(DialPayload payload) => Press();
+    public override void DialDown(DialPayload payload) => Perform(Gesture(PressKey));
 
     public override void DialUp(DialPayload payload)
     {
     }
 
-    /// <summary>A short tap does what the press does; a hold always moves to the next monitor.</summary>
-    public override void TouchPress(TouchpadPressPayload payload)
-    {
-        if (payload.IsLongPress)
-        {
-            NextMonitor();
-            return;
-        }
+    public override void TouchPress(TouchpadPressPayload payload) => Perform(Gesture(payload.IsLongPress ? HoldKey : TapKey));
 
-        Press();
-    }
-
-    private void Press()
+    private string Gesture(string key)
     {
-        string action;
         lock (_gate)
         {
-            action = _pressAction;
-        }
-
-        if (action == PressNext)
-        {
-            NextMonitor();
-            return;
-        }
-
-        if (!DisplayBrightnessHub.Toggle())
-        {
-            _ = Connection.ShowAlert();
+            return key switch
+            {
+                PressKey => _press,
+                TapKey => _tap,
+                _ => _hold,
+            };
         }
     }
 
-    private void NextMonitor()
+    private void Perform(string gesture)
     {
-        if (!DisplayBrightnessHub.NextMonitor())
+        switch (gesture)
         {
-            _ = Connection.ShowAlert(); // one monitor, or none: nothing to cycle to
+            case GestureDim:
+                if (!DisplayBrightnessHub.Toggle(Monitor))
+                {
+                    _ = Connection.ShowAlert();
+                }
+
+                break;
+
+            case GestureNext:
+            case GesturePrevious:
+                var target = DisplayBrightnessHub.Neighbor(Monitor, gesture == GestureNext ? 1 : -1);
+                if (target is null)
+                {
+                    _ = Connection.ShowAlert(); // one monitor, or none: nothing to move to
+                    return;
+                }
+
+                BindTo(target);
+                break;
+
+            default:
+                break;
         }
+    }
+
+    /// <summary>Point this dial at a monitor by name and remember it in the action's settings.</summary>
+    private void BindTo(string monitorName)
+    {
+        JObject settings;
+        lock (_gate)
+        {
+            _monitor = monitorName;
+            _settings[MonitorKey] = monitorName;
+            settings = (JObject)_settings.DeepClone();
+        }
+
+        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness bound to {monitorName}");
+        _ = Connection.SetSettingsAsync(settings);
+        Push(Current, full: false);
     }
 
     // -- display --------------------------------------------------------------
@@ -150,6 +195,14 @@ public sealed class DisplayBrightnessAction : EncoderBase
             var frame = DisplayBrightnessRenderer.Render(snapshot, TileFor(snapshot.Dimmed || !snapshot.Available));
             payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
+
+            // The badge is this layout's own item, outside the shared frame.
+            var badge = DisplayBrightnessRenderer.MonitorBadge(snapshot);
+            if (full || badge != _lastBadge)
+            {
+                payload[DisplayBrightnessRenderer.BadgeKey] = badge;
+                _lastBadge = badge;
+            }
         }
 
         if (payload.Count == 0)
@@ -185,7 +238,11 @@ public sealed class DisplayBrightnessAction : EncoderBase
 
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload) => ApplySettings(payload.Settings, writeBackDefaults: false);
+    public override void ReceivedSettings(ReceivedSettingsPayload payload)
+    {
+        ApplySettings(payload.Settings, writeBackDefaults: false);
+        Push(Current, full: false);
+    }
 
     public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) => GlobalSettingsStore.Apply(payload.Settings);
 
@@ -193,15 +250,28 @@ public sealed class DisplayBrightnessAction : EncoderBase
     {
         lock (_gate)
         {
+            _settings = settings is null ? new JObject() : (JObject)settings.DeepClone();
+            var monitor = SettingsReader.GetString(settings, MonitorKey, PropertyInspectorBridge.AutomaticValue);
+            _monitor = monitor == PropertyInspectorBridge.AutomaticValue ? "" : monitor;
             _stepPercent = int.Parse(SettingsReader.GetString(settings, StepKey, "2", Steps));
-            _pressAction = SettingsReader.GetString(settings, PressKey, PressDim, PressActions);
+            _press = SettingsReader.GetString(settings, PressKey, GestureDim, Gestures);
+            _tap = SettingsReader.GetString(settings, TapKey, GestureNext, Gestures);
+            _hold = SettingsReader.GetString(settings, HoldKey, GesturePrevious, Gestures);
         }
 
-        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, StepKey, PressKey))
+        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, MonitorKey, StepKey, PressKey, TapKey, HoldKey))
         {
-            var filled = settings is null ? new JObject() : (JObject)settings.DeepClone();
-            filled[StepKey] = _stepPercent.ToString();
-            filled[PressKey] = _pressAction;
+            JObject filled;
+            lock (_gate)
+            {
+                _settings[MonitorKey] = _monitor.Length == 0 ? PropertyInspectorBridge.AutomaticValue : _monitor;
+                _settings[StepKey] = _stepPercent.ToString();
+                _settings[PressKey] = _press;
+                _settings[TapKey] = _tap;
+                _settings[HoldKey] = _hold;
+                filled = (JObject)_settings.DeepClone();
+            }
+
             _ = Connection.SetSettingsAsync(filled);
         }
     }
@@ -209,6 +279,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
     public override void Dispose()
     {
         DisplayBrightnessHub.Changed -= _onChanged;
+        DisplayBrightnessHub.MonitorsChanged -= _onMonitorsChanged;
         Logger.Instance.LogMessage(TracingLevel.INFO, "[action] display brightness disappear");
     }
 }

@@ -3,16 +3,17 @@ using NowPlaying.Device;
 
 namespace NowPlaying.Plugin;
 
-/// <summary>The single display-brightness service shared by every instance of the action.</summary>
+/// <summary>The single display-brightness service shared by every instance of the action; each instance binds to its own monitor.</summary>
 internal static class DisplayBrightnessHub
 {
     private static readonly object Gate = new();
     private static DisplayBrightnessService? _service;
-    private static string? _preferredMonitor;
 
-    public static event Action<DisplayBrightnessSnapshot>? Changed;
+    /// <summary>One monitor's snapshot changed.</summary>
+    public static event Action<string, DisplayBrightnessSnapshot>? Changed;
 
-    public static DisplayBrightnessSnapshot Current => _service?.Current ?? DisplayBrightnessSnapshot.Unavailable;
+    /// <summary>The set of monitors changed; bindings should be re-resolved.</summary>
+    public static event Action? MonitorsChanged;
 
     public static void Attach()
     {
@@ -24,28 +25,24 @@ internal static class DisplayBrightnessHub
             }
 
             var service = new DisplayBrightnessService(message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[display] {message}"));
-            service.Changed += snapshot => Changed?.Invoke(snapshot);
-            service.SetPreferredMonitor(_preferredMonitor);
+            service.Changed += (name, snapshot) => Changed?.Invoke(name, snapshot);
+            service.MonitorsChanged += () => MonitorsChanged?.Invoke();
             _service = service;
             service.Start();
         }
     }
 
-    /// <summary>The remembered monitor from global settings; applied at the next bind.</summary>
-    public static void SetPreferredMonitor(string? name)
-    {
-        lock (Gate)
-        {
-            _preferredMonitor = string.IsNullOrWhiteSpace(name) ? null : name;
-            _service?.SetPreferredMonitor(_preferredMonitor);
-        }
-    }
+    public static IReadOnlyList<string> MonitorNames => _service?.MonitorNames ?? Array.Empty<string>();
 
-    public static bool Adjust(int delta) => _service?.Adjust(delta) ?? false;
+    public static string? Resolve(string? name) => _service?.Resolve(name);
 
-    public static bool Toggle() => _service?.Toggle() ?? false;
+    public static DisplayBrightnessSnapshot Get(string? name) => _service?.Get(name) ?? DisplayBrightnessSnapshot.Unavailable;
 
-    public static bool NextMonitor() => _service?.NextMonitor() ?? false;
+    public static string? Neighbor(string? name, int direction) => _service?.Neighbor(name, direction);
+
+    public static bool Adjust(string? name, int delta) => _service?.Adjust(name, delta) ?? false;
+
+    public static bool Toggle(string? name) => _service?.Toggle(name) ?? false;
 
     public static void Refresh() => _service?.Refresh();
 }

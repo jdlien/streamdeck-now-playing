@@ -6,6 +6,11 @@
   <script src="sdpi-components.js"></script>
 </head>
 <body>
+  <sdpi-item label="Monitor">
+    <sdpi-select setting="monitor" default="auto" datasource="monitors" hot-reload show-refresh
+                 loading="Looking for monitors…" placeholder="Automatic (primary monitor)"></sdpi-select>
+  </sdpi-item>
+
   <sdpi-item label="Step per click">
     <sdpi-select setting="step" default="2">
       <option value="1">1%</option>
@@ -15,15 +20,35 @@
     </sdpi-select>
   </sdpi-item>
 
-  <sdpi-item label="Press / tap">
+  <sdpi-item label="Press dial">
     <sdpi-select setting="pressAction" default="dim">
       <option value="dim">Dim and restore</option>
       <option value="next">Next monitor</option>
+      <option value="previous">Previous monitor</option>
+      <option value="none">Nothing</option>
+    </sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="Tap strip">
+    <sdpi-select setting="tapAction" default="next">
+      <option value="dim">Dim and restore</option>
+      <option value="next">Next monitor</option>
+      <option value="previous">Previous monitor</option>
+      <option value="none">Nothing</option>
+    </sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="Hold strip">
+    <sdpi-select setting="holdAction" default="previous">
+      <option value="dim">Dim and restore</option>
+      <option value="next">Next monitor</option>
+      <option value="previous">Previous monitor</option>
+      <option value="none">Nothing</option>
     </sdpi-select>
   </sdpi-item>
 
   <sdpi-item label="">
-    <small>Controls a monitor's brightness over DDC/CI, the same channel the monitor's own menu uses. Turn to adjust. Holding the touch strip always moves to the next monitor that answers; the chosen monitor is remembered. If nothing happens, enable DDC/CI in the monitor's menu; HDR mode may also lock brightness on some monitors.</small>
+    <small>Controls one monitor's brightness over DDC/CI, the same channel the monitor's own menu uses. Each dial has its own monitor, so two dials can serve two monitors; "next" and "previous" move this dial to another monitor that answers and remember it. If a monitor is missing from the list, enable DDC/CI in its menu; HDR mode may also lock brightness on some monitors.</small>
   </sdpi-item>
 </body>
 </html>

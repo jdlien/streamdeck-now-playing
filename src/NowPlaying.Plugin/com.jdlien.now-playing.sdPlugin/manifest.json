@@ -108,7 +108,7 @@
     {
       "UUID": "com.jdlien.now-playing.display-brightness",
       "Name": "Display Brightness",
-      "Tooltip": "A monitor's brightness over DDC/CI, in the same layout. Turn to adjust; press or tap to dim and restore, or to switch monitors; hold the strip to switch monitors.",
+      "Tooltip": "A monitor's brightness over DDC/CI, in the same layout. Each dial picks its own monitor. Turn to adjust; press, tap, and hold are configurable: dim and restore, next or previous monitor.",
       "Icon": "imgs/actions/display-brightness/icon",
       "Controllers": [ "Encoder" ],
       "PropertyInspectorPath": "pi/display-brightness.html",
@@ -116,9 +116,9 @@
         "layout": "layouts/display-brightness.json",
         "TriggerDescription": {
           "Rotate": "Brightness",
-          "Push": "Dim / restore (or next monitor)",
-          "Touch": "Dim / restore (or next monitor)",
-          "LongTouch": "Next monitor"
+          "Push": "Dim / restore",
+          "Touch": "Next monitor",
+          "LongTouch": "Previous monitor"
         }
       },
       "States": [
