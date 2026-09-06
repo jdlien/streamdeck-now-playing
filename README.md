@@ -260,6 +260,12 @@ seek, track change, or state change. So:
   structs is exact.
 - Displayed position while `Paused` = `Position`. The bar freezes. Apple Music
   confirms this model: on pause its `LastUpdatedTime` stops advancing.
+- On resume, the timeline still carries the report time from the pause, so
+  extrapolating by its age would count the whole pause as playback. Seen live
+  2026-09-06: a resume showed 4:15 of 4:15 until the next timeline event. The
+  service substitutes the resume moment as the report time until the player
+  reports a fresh timeline, which for Apple Music takes under a second and for
+  a player that never refreshes on resume is what keeps the bar honest.
 - Every `TimelinePropertiesChanged` event replaces the base values, which
   corrects drift and handles seeks and track changes.
 - The 1 Hz ticker only redraws. It never calls into the media API.
@@ -396,9 +402,16 @@ Notes from the layout schema:
 
 - Push a full payload on `willAppear` and after any recovery event.
 - Otherwise push only changed keys. Metadata and state changes are pushed as
-  they arrive (after the debounce). Progress is pushed at 1 Hz while playing.
-  On a 184 px bar and a 4-minute track that is roughly one pixel every 1.3 s,
-  so 1 Hz is already smoother than the display can show.
+  they arrive (after the debounce). Progress is pushed at 1 Hz while playing
+  from StreamDeck-Tools' per-action tick, which reads the service's current
+  snapshot and extrapolates. On a 184 px bar and a 4-minute track that is
+  roughly one pixel every 1.3 s, so 1 Hz is already smoother than the display
+  can show.
+- The service raises its change event only for significant changes: state,
+  text, duration, a control flag, or a position jump of more than 2 s (a
+  seek). Apple Music's twice-a-second timeline updates only refresh the
+  current snapshot silently. Measured 2026-09-06: without this, every
+  timeline event became a push.
 - Nothing is pushed while no action instance is visible.
 
 ## 7. Input handling

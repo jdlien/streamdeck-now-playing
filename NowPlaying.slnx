@@ -4,4 +4,7 @@
     <Project Path="src/NowPlaying.Media/NowPlaying.Media.csproj" />
     <Project Path="src/NowPlaying.Plugin/NowPlaying.Plugin.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NowPlaying.Media.Tests/NowPlaying.Media.Tests.csproj" />
+  </Folder>
 </Solution>
