@@ -10,26 +10,26 @@
       "value": "imgs/icons/pause.svg"
     },
     {
-      "key": "track",
-      "type": "text",
-      "rect": [ 38, 4, 158, 30 ],
-      "zOrder": 1,
-      "alignment": "left",
-      "font": { "size": 18, "weight": 600 },
-      "text-overflow": "ellipsis",
-      "color": "white",
-      "value": "No media"
-    },
-    {
       "key": "artist",
       "type": "text",
-      "rect": [ 38, 36, 158, 26 ],
+      "rect": [ 38, 6, 158, 26 ],
       "zOrder": 1,
       "alignment": "left",
-      "font": { "size": 14, "weight": 400 },
+      "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis",
       "color": "lightGray",
       "value": ""
+    },
+    {
+      "key": "track",
+      "type": "text",
+      "rect": [ 8, 34, 184, 28 ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": { "size": 16, "weight": 600 },
+      "text-overflow": "ellipsis",
+      "color": "white",
+      "value": "No media"
     },
     {
       "key": "progress",

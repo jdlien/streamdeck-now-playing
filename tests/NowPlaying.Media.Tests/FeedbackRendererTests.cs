@@ -101,11 +101,15 @@ public class FeedbackRendererTests
     }
 
     [Fact]
-    public void OnlyAnArtistMovesUpToTheFirstLine()
+    public void EachTextStaysOnItsOwnRowWhenTheOtherIsMissing()
     {
-        var frame = FeedbackRenderer.Render(FoobarPlaying with { Title = "" }, Now);
-        Assert.Equal("BT", frame.Track);
-        Assert.Equal("", frame.Artist);
+        var artistOnly = FeedbackRenderer.Render(FoobarPlaying with { Title = "" }, Now);
+        Assert.Equal("", artistOnly.Track);
+        Assert.Equal("BT", artistOnly.Artist);
+
+        var titleOnly = FeedbackRenderer.Render(FoobarPlaying with { Artist = "" }, Now);
+        Assert.Equal("Remember (ESCM 12' Mix)", titleOnly.Track);
+        Assert.Equal("", titleOnly.Artist);
     }
 
     [Fact]

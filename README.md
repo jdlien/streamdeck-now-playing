@@ -18,8 +18,10 @@ on the first page.
 
 Display:
 - A small play or pause icon in the top-left corner, reflecting playback state.
-- Song title on the top line, to the right of the icon.
-- Artist on the line below.
+- Artist on the top line, to the right of the icon.
+- Song title on the line below, across the full width. (Originally the other
+  way round; swapped 2026-09-06 after the first look at the strip, because the
+  title is the line that needs the room and the icon shortens the top row.)
 - A playback progress bar underneath the text.
 - Elapsed time at the bottom left and track length at the bottom right, in
   small text. Added 2026-09-06 after the first look at the strip.
@@ -359,6 +361,8 @@ logic with its tests; `worker.rs` holds the WinRT calls). Reused here:
 - The measured facts: foobar2000 v2 registers natively without a timeline,
   Apple Music is `Opened` and current at launch, the em dash in Apple Music's
   artist field, and 1 s polling making Spotify sluggish.
+- The row assignment: artist on the narrow row beside the icon, title on the
+  full-width row. The keyboard LCD had taught the same lesson.
 - `ak820 probe` is the same idea as `tools/Check-MediaSessions.ps1`.
 
 Not carried over: the 3 s polling loop (this plugin is event-driven with a
@@ -384,12 +388,12 @@ property inspector.
   "id": "com.jdlien.now-playing.layout",
   "items": [
     { "key": "icon",     "type": "pixmap", "rect": [8, 8, 24, 24], "zOrder": 1 },
-    { "key": "track",    "type": "text",   "rect": [38, 4, 158, 30], "zOrder": 1,
-      "alignment": "left", "font": { "size": 18, "weight": 600 },
-      "text-overflow": "ellipsis", "color": "white" },
-    { "key": "artist",   "type": "text",   "rect": [38, 36, 158, 26], "zOrder": 1,
-      "alignment": "left", "font": { "size": 14, "weight": 400 },
+    { "key": "artist",   "type": "text",   "rect": [38, 6, 158, 26], "zOrder": 1,
+      "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
+    { "key": "track",    "type": "text",   "rect": [8, 34, 184, 28], "zOrder": 1,
+      "alignment": "left", "font": { "size": 16, "weight": 600 },
+      "text-overflow": "ellipsis", "color": "white" },
     { "key": "progress", "type": "bar",    "rect": [8, 66, 184, 10], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
       "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
@@ -404,8 +408,11 @@ property inspector.
 Notes from the layout schema:
 - `text-overflow` accepts `clip`, `ellipsis`, `fade`; `ellipsis` is the default.
   `fade` is worth a look once real titles are on the strip.
-- `font.weight` is 100..1000. `zOrder` is 0..700 and items sharing a zOrder
-  must not overlap.
+- `font.weight` accepts 100..1000, but how many distinct weights actually
+  render depends on the faces the Stream Deck app ships for its UI font.
+  Artist and title are both 16 px; the title carries weight 600 against the
+  artist's 400. If those two look identical on the strip, try 700.
+- `zOrder` is 0..700 and items sharing a zOrder must not overlap.
 - `bar.subtype`: 0 rectangle, 1 double rectangle, 2 trapezoid, 3 double
   trapezoid, 4 groove (default).
 - `pixmap.value` accepts a file path relative to the plugin folder, a base64
@@ -417,14 +424,15 @@ Notes from the layout schema:
 
 ### 6.2 States
 
-| Condition | Icon | Track | Artist | Bar |
+| Condition | Icon | Top row (artist) | Full-width row (title) | Bar and times |
 | --- | --- | --- | --- | --- |
-| No session or Closed | hidden | `No media` | empty | hidden (`enabled: false`) |
-| Playing, duration known | play | title | artist | visible, advancing |
-| Playing, no duration | play | title | artist | hidden |
-| Paused or Stopped, metadata known | pause | title | artist | frozen at last position |
+| No session or Closed | hidden | empty | `No media` | hidden (`enabled: false`), times blank |
+| Playing, duration known | play | artist | title | visible, advancing |
+| Playing, no duration | play | artist | title | hidden, times blank |
+| Paused or Stopped, metadata known | pause | artist | title | frozen at last position |
 | Changing | previous | previous | previous | previous |
-| Session present, no title or artist | as state | app name | empty | as above |
+| Session present, no title or artist | as state | empty | app name | as above |
+| Only one of title or artist | as state | artist or empty | title or empty | as above |
 
 ### 6.3 Update policy
 

@@ -38,17 +38,13 @@ public static class FeedbackRenderer
 
         var icon = snapshot.State is PlaybackState.Playing or PlaybackState.Changing ? PlayIcon : PauseIcon;
 
+        // The artist takes the narrow row beside the icon and the title the
+        // full-width row below it: the title is the line that needs the room.
         var track = snapshot.Title;
         var artist = snapshot.Artist;
         if (track.Length == 0 && artist.Length == 0)
         {
             track = AppDisplayName(snapshot.AppId);
-        }
-        else if (track.Length == 0)
-        {
-            // Only an artist: move it up so the first line is never blank.
-            track = artist;
-            artist = "";
         }
 
         var barEnabled = false;
