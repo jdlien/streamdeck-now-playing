@@ -35,12 +35,15 @@ internal static class Program
                 return await VolumeAsync();
             case "brightness":
                 return Brightness(args.Skip(1).FirstOrDefault(a => !a.StartsWith("--")));
+            case "display":
+                return await DisplayAsync(args.Skip(1).FirstOrDefault(a => !a.StartsWith("--")));
             default:
-                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch|volume|brightness <0-100>] [--json] [--ticks]");
+                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch|volume|brightness <0-100>|display [<0-100>]] [--json] [--ticks]");
                 Console.Error.WriteLine("  probe   list every Windows media session and exit");
                 Console.Error.WriteLine("  watch   print a line per snapshot change; reads next/prev/toggle/refresh/quit on stdin");
                 Console.Error.WriteLine("  volume  print the default output device's volume; reads up/down/mute/quit on stdin");
                 Console.Error.WriteLine("  brightness <0-100>  list Stream Deck + HID paths and set their screen brightness");
+                Console.Error.WriteLine("  display [<0-100>]   list monitors with DDC/CI brightness; optionally set the primary monitor's");
                 Console.Error.WriteLine("  --ticks in watch mode, also print the extrapolated position once a second while playing");
                 return 2;
         }
@@ -196,6 +199,61 @@ internal static class Program
         var applied = NowPlaying.Device.StreamDeckHid.SetBrightnessAll(percent, message => Console.Error.WriteLine($"[hid] {message}"));
         Console.WriteLine($"brightness {percent}% applied to {applied} device(s)");
         return applied > 0 ? 0 : 1;
+    }
+
+    // -- display brightness -----------------------------------------------
+
+    private static async Task<int> DisplayAsync(string? percentText)
+    {
+        var monitors = NowPlaying.Device.MonitorConfiguration.Enumerate(message => Console.Error.WriteLine($"[ddc] {message}"));
+        Console.WriteLine($"monitors: {monitors.Count}");
+        foreach (var m in monitors)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var (min, current, max) = NowPlaying.Device.MonitorConfiguration.ReadBrightness(m.Handle);
+                var percent = NowPlaying.Device.MonitorConfiguration.ToPercent(min, current, max);
+                Console.WriteLine($"  {m.GdiDeviceName}{(m.IsPrimary ? " (primary)" : "")}  '{m.Name}'  brightness {current} of {min}..{max} = {percent}%  ({sw.ElapsedMilliseconds} ms)");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  {m.GdiDeviceName}{(m.IsPrimary ? " (primary)" : "")}  '{m.Name}'  no DDC/CI answer: {ex.Message}");
+            }
+        }
+
+        NowPlaying.Device.MonitorConfiguration.Destroy(monitors);
+
+        if (percentText is null)
+        {
+            return monitors.Count > 0 ? 0 : 1;
+        }
+
+        if (!int.TryParse(percentText, out var target) || target < 0 || target > 100)
+        {
+            Console.Error.WriteLine("display brightness must be 0..100");
+            return 2;
+        }
+
+        using var service = new NowPlaying.Device.DisplayBrightnessService(message => Console.Error.WriteLine($"[ddc] {message}"));
+        var done = new TaskCompletionSource<NowPlaying.Device.DisplayBrightnessSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.Changed += s =>
+        {
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] display  {s.Level,3}%  {(s.Dimmed ? "dimmed" : "on    ")}  {s.Name}");
+            if (s.Available)
+            {
+                done.TrySetResult(s);
+            }
+        };
+        service.Start();
+        var bound = await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var delta = target - bound.Level;
+        Console.WriteLine($"adjusting by {delta:+#;-#;0} to {target}%");
+        service.Adjust(delta);
+        await Task.Delay(1500);
+        var (_, after, _) = NowPlaying.Device.MonitorConfiguration.ReadBrightness(NowPlaying.Device.MonitorConfiguration.Enumerate().First(m => m.IsPrimary).Handle);
+        Console.WriteLine($"monitor now reports {after} units");
+        return 0;
     }
 
     private static void PrintVolume(NowPlaying.Audio.VolumeSnapshot volume) =>

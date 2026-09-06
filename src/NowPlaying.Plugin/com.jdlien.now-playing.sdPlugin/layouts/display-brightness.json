@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+  "id": "com.jdlien.now-playing.display-brightness-layout",
+  "items": [
+    {
+      "key": "icon",
+      "type": "pixmap",
+      "rect": [ 4, 2, 36, 36 ],
+      "zOrder": 1,
+      "value": "imgs/icons/monitor.svg"
+    },
+    {
+      "key": "artist",
+      "type": "text",
+      "rect": [ 46, 7, 150, 26 ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": { "size": 16, "weight": 400 },
+      "text-overflow": "ellipsis",
+      "color": "lightGray",
+      "value": ""
+    },
+    {
+      "key": "track",
+      "type": "text",
+      "rect": [ 4, 38, 192, 26 ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": { "size": 16, "weight": 600 },
+      "text-overflow": "ellipsis",
+      "color": "white",
+      "value": "Brightness"
+    },
+    {
+      "key": "progress",
+      "type": "bar",
+      "rect": [ 4, 68, 192, 8 ],
+      "zOrder": 1,
+      "subtype": 0,
+      "border_w": 0,
+      "range": { "min": 0, "max": 1000 },
+      "bar_bg_c": "#333333",
+      "bar_fill_c": "white",
+      "value": 0,
+      "enabled": true
+    },
+    {
+      "key": "elapsed",
+      "type": "text",
+      "rect": [ 4, 78, 80, 20 ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": { "size": 14, "weight": 400 },
+      "text-overflow": "clip",
+      "color": "lightGray",
+      "value": "0"
+    },
+    {
+      "key": "total",
+      "type": "text",
+      "rect": [ 116, 78, 80, 20 ],
+      "zOrder": 1,
+      "alignment": "right",
+      "font": { "size": 14, "weight": 400 },
+      "text-overflow": "clip",
+      "color": "lightGray",
+      "value": "100"
+    }
+  ]
+}

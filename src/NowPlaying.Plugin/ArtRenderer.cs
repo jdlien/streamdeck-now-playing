@@ -159,6 +159,47 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
+    /// <summary>The display brightness dial's tile: a monitor outline with a small sun on its screen, greyed when dimmed.</summary>
+    public static byte[] RenderMonitorTile(bool dimmed, int size = DialTileSize)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+
+        var rect = new SKRect(0, 0, size, size);
+        var corner = size * 0.14f;
+        using var tile = new SKPaint { Color = new SKColor(0x2c, 0x2c, 0x32), IsAntialias = true };
+        canvas.DrawRoundRect(rect, corner, corner, tile);
+
+        var color = dimmed ? DimGlyph : SKColors.White;
+        var stroke = Math.Max(1.5f, size * 0.06f);
+        using var line = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = stroke, StrokeCap = SKStrokeCap.Round };
+        using var fill = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Fill };
+
+        // Screen: a wide rounded rectangle; stand: a short stem and a foot.
+        var screen = new SKRect(size * 0.16f, size * 0.22f, size * 0.84f, size * 0.64f);
+        canvas.DrawRoundRect(screen, size * 0.05f, size * 0.05f, line);
+        canvas.DrawLine(size / 2f, screen.Bottom, size / 2f, size * 0.76f, line);
+        canvas.DrawLine(size * 0.36f, size * 0.78f, size * 0.64f, size * 0.78f, line);
+
+        // A small sun in the screen.
+        var cx = size / 2f;
+        var cy = (screen.Top + screen.Bottom) / 2f;
+        var r = size * 0.07f;
+        canvas.DrawCircle(cx, cy, r, fill);
+        using var ray = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = Math.Max(1f, size * 0.04f), StrokeCap = SKStrokeCap.Round };
+        for (var i = 0; i < 8; i++)
+        {
+            var angle = i * MathF.PI / 4f;
+            canvas.DrawLine(
+                cx + MathF.Cos(angle) * r * 1.6f, cy + MathF.Sin(angle) * r * 1.6f,
+                cx + MathF.Cos(angle) * r * 2.3f, cy + MathF.Sin(angle) * r * 2.3f,
+                ray);
+        }
+
+        return Encode(surface);
+    }
+
     /// <summary>Speaker body and cone with two sound arcs, or a cross when muted, fitted into a box of side <paramref name="box"/>.</summary>
     private static void DrawSpeaker(SKCanvas canvas, float cx, float cy, float box, bool muted, SKColor color)
     {

@@ -58,6 +58,11 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   level; a glow rather than black so the deck never looks dead.
   Talks to the hardware directly, because the plugin protocol has no
   brightness command (see 5.10).
+- **Display Brightness**, a fifth action for a dial: the primary monitor's
+  brightness over DDC/CI, with the monitor's real name from its EDID on the
+  top row. Turn to adjust (2% default), press or tap to dim to the monitor's
+  minimum and back. Changes made on the monitor's own menu are picked up by
+  a periodic re-read (see 5.11).
 
 ## 2. Verified environment
 
@@ -162,21 +167,22 @@ and paused:
 NowPlaying.slnx
   src/NowPlaying.Media/          class library: Windows media session wrapper
   src/NowPlaying.Audio/          class library: default output device volume over NAudio's WASAPI wrappers
-  src/NowPlaying.Device/         class library: Stream Deck brightness over a HID feature report (plain Win32)
-  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe, watch, volume, brightness
+  src/NowPlaying.Device/         class library: Stream Deck brightness over a HID feature report, monitor brightness over DDC/CI (plain Win32)
+  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe, watch, volume, brightness, display
   src/NowPlaying.Plugin/         Stream Deck plugin (StreamDeck-Tools); builds into the sdPlugin folder
     NowPlayingAction.cs          the dial action
     NowPlayingKeyAction.cs       the key action
     VolumeAction.cs              the volume dial; VolumeHub.cs, VolumeRenderer.cs alongside
-    BrightnessAction.cs          the brightness dial; BrightnessHub.cs, BrightnessRenderer.cs, GlobalSettingsStore.cs alongside
+    BrightnessAction.cs          the SD brightness dial; BrightnessHub.cs, BrightnessRenderer.cs, GlobalSettingsStore.cs alongside
+    DisplayBrightnessAction.cs   the monitor brightness dial; DisplayBrightnessHub.cs, DisplayBrightnessRenderer.cs alongside
     FeedbackRenderer.cs          snapshot -> layout items, diffed (pure)
     ArtRenderer.cs               album art + glyph compositing with SkiaSharp (pure)
     MediaHub.cs                  the one shared media service
     PropertyInspectorBridge.cs   the "sessions" data source and the preferred-player global setting
     com.jdlien.now-playing.sdPlugin/
       manifest.json
-      layouts/now-playing.json, volume.json, brightness.json   same rectangles, different defaults
-      pi/dial.html, key.html, volume.html, brightness.html     property inspectors on sdpi-components v4 (local copy)
+      layouts/now-playing.json, volume.json, brightness.json, display-brightness.json   same rectangles, different defaults
+      pi/dial.html, key.html, volume.html, brightness.html, display-brightness.html     property inspectors on sdpi-components v4 (local copy)
       imgs/icons/                play.svg, pause.svg for the layout's pixmap item
       imgs/plugin/, imgs/actions/  placeholder PNG icons for the Stream Deck app
       bin/                       build output, git-ignored; manifest CodePath is bin/NowPlaying.exe
@@ -199,6 +205,7 @@ dotnet run --project src/NowPlaying.Media.Cli -- probe           # what Windows 
 dotnet run --project src/NowPlaying.Media.Cli -- watch --ticks   # live snapshots; type next / prev / toggle / refresh / quit
 dotnet run --project src/NowPlaying.Media.Cli -- volume          # default output device; type up / down / mute / quit
 dotnet run --project src/NowPlaying.Media.Cli -- brightness 70   # list Stream Deck + HID paths and set their brightness
+dotnet run --project src/NowPlaying.Media.Cli -- display         # monitors with EDID names and DDC/CI brightness; add a percent to set
 ```
 
 Debug builds of the plugin land straight in the `.sdPlugin/bin/` folder, so
@@ -477,6 +484,42 @@ Marketplace note: the guidelines say nothing about plugins reaching the
 hardware directly. It is a review risk to flag in the submission notes, and a
 reason to keep this action easy to leave out of the listing if Elgato objects.
 
+### 5.11 Monitor brightness (DDC/CI)
+
+The primary monitor's brightness goes through Windows' Monitor Configuration
+API (`dxva2.dll`: `GetMonitorBrightness`, `SetMonitorBrightness`), which
+speaks DDC/CI over the display cable. The same route Twinkle Tray and
+Monitorian use; no library.
+
+Measured 2026-09-06 on the Odyssey G95NC over NVIDIA DisplayPort: DDC/CI
+answers, the range is 0..50 (not 0..100), a read takes 65 to 75 ms, the
+capabilities string takes 1.1 s, and a write of +1 unit is reflected on the
+next read.
+
+`MonitorConfiguration` and `DisplayBrightnessService` in `NowPlaying.Device`:
+
+- **The monitor's real name** comes from the display configuration API
+  (`QueryDisplayConfig` + `DisplayConfigGetDeviceInfo`), which reads the EDID
+  friendly name, "Odyssey G95NC" here, and maps it to the GDI display the
+  physical monitor hangs off. dxva2 alone only says "Generic PnP Monitor".
+- **Percent, not units.** The strip shows 0..100 and maps to the monitor's own
+  range on write; 2% is one unit on a 0..50 monitor.
+- **Latest value wins.** Every command is a slow round trip, so a dedicated
+  worker applies only the most recent requested level; a fast spin costs one
+  or two writes, not a queue. The strip shows the requested level at once.
+- **No notifications from the monitor.** A 30 s re-read adopts changes made on
+  the monitor's menu, skipped while a write is pending. A failed read or write
+  re-enumerates, which covers a monitor that slept or was unplugged. Wake
+  triggers a re-enumeration too.
+- **Dim toggle** goes to the monitor's minimum (0%), which on a monitor is a
+  dim backlight rather than black; un-dimming from a level of 0 restores to
+  30%. Adjusting while dimmed un-dims.
+- **Primary only.** The primary display is chosen; a monitor that does not
+  answer DDC/CI shows "No DDC/CI monitor" and every command alerts.
+
+Known limits to test: HDR mode locks brightness on many monitors, some ship
+with DDC/CI off in their menu, and USB-C docks and KVMs can drop it.
+
 ## 6. Display design
 
 ### 6.1 Layout
@@ -625,6 +668,14 @@ Brightness dial:
 | --- | --- |
 | `dialRotate` | Level moves by `ticks` times the step (default 2%; the dial moves fast), applied to the hardware at once and saved to global settings. Adjusting while dimmed turns the screen back on. Rotation while pressed is ignored. |
 | `dialDown` | Toggle between a 4% glow and the remembered level. `dialUp` ignored. |
+| `touchTap` | Short tap toggles; a hold is ignored. |
+
+Display brightness dial:
+
+| Event | Behaviour |
+| --- | --- |
+| `dialRotate` | Level moves by `ticks` times the step (default 2%); the strip updates at once and the worker writes the latest value to the monitor. Adjusting while dimmed un-dims. Rotation while pressed is ignored. |
+| `dialDown` | Toggle between the monitor's minimum and the remembered level. `dialUp` ignored. |
 | `touchTap` | Short tap toggles; a hold is ignored. |
 
 Key action:
@@ -802,7 +853,7 @@ Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
   by email. Plugins needing hardware also need a short video. Free is fine;
   name and monetization cannot change afterwards. No code signing requirement
   appears in the docs.
-- Guideline items this plugin now meets: four actions (they ask for 2 to 30),
+- Guideline items this plugin now meets: five actions (they ask for 2 to 30),
   configurable actions with a property inspector, monochrome white action and
   category icons, `showAlert` on failure, layout updates well under 10 per
   second, a UUID with author and plugin name that must never change.
