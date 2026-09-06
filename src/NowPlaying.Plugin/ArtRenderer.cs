@@ -47,12 +47,15 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
+    /// <summary>The layout's icon slot is 40 x 40; the tile is drawn 1:1 to avoid resampling on the strip.</summary>
+    public const int DialTileSize = 40;
+
     /// <summary>
-    /// The dial's icon tile, drawn 1:1 at the layout's 56 px slot: the art
-    /// under a light scrim with the glyph centred on it. A corner badge would
-    /// be too small at this size, so the whole tile carries the state.
+    /// The dial's icon tile: the art under a light scrim with the glyph
+    /// centred on it. A corner badge would be too small at this size, so the
+    /// whole tile carries the state.
     /// </summary>
-    public static byte[] RenderDialIcon(PlaybackState state, byte[]? art, int size = 56)
+    public static byte[] RenderDialIcon(PlaybackState state, byte[]? art, int size = DialTileSize)
     {
         using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
         var canvas = surface.Canvas;

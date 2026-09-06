@@ -64,9 +64,9 @@ public class ArtRendererTests
     public void TheDialTileIsTransparentOutsideItsRoundedCorners()
     {
         using var tile = Decode(ArtRenderer.RenderDialIcon(PlaybackState.Paused, SampleArt()));
-        Assert.Equal((56, 56), (tile.Width, tile.Height));
+        Assert.Equal((ArtRenderer.DialTileSize, ArtRenderer.DialTileSize), (tile.Width, tile.Height));
         Assert.Equal(0, tile.GetPixel(0, 0).Alpha);
-        Assert.True(tile.GetPixel(28, 4).Alpha > 200, "the tile itself is opaque");
+        Assert.True(tile.GetPixel(ArtRenderer.DialTileSize / 2, 3).Alpha > 200, "the tile itself is opaque");
     }
 
     [Fact]
@@ -74,7 +74,8 @@ public class ArtRendererTests
     {
         using var tile = Decode(ArtRenderer.RenderDialIcon(PlaybackState.Playing, null));
         Assert.Equal(0, tile.GetPixel(2, 2).Alpha);
-        Assert.True(tile.GetPixel(24, 28).Alpha > 200, "the glyph is drawn");
+        var centre = ArtRenderer.DialTileSize / 2;
+        Assert.True(tile.GetPixel(centre - 2, centre).Alpha > 200, "the glyph is drawn");
     }
 
     [Fact]

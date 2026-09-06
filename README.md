@@ -19,10 +19,9 @@ on the first page.
 Display:
 - A small play or pause icon in the top-left corner, reflecting playback state.
 - Artist on the top line, to the right of the icon.
-- Song title on the line below. (Originally the other way round; swapped
-  2026-09-06 after the first look at the strip, because the title is the line
-  that needs the room. Later the same day the art tile grew to span both rows,
-  so both rows now start to its right.)
+- Song title on the line below, across the full width. (Originally the other
+  way round; swapped 2026-09-06 after the first look at the strip, because the
+  title is the line that needs the room and the icon shortens the top row.)
 - A playback progress bar underneath the text.
 - Elapsed time at the bottom left and track length at the bottom right, in
   small text. Added 2026-09-06 after the first look at the strip.
@@ -406,23 +405,29 @@ property inspector.
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
   "id": "com.jdlien.now-playing.layout",
   "items": [
-    { "key": "icon",     "type": "pixmap", "rect": [4, 4, 56, 56], "zOrder": 1 },
-    { "key": "artist",   "type": "text",   "rect": [66, 6, 130, 26], "zOrder": 1,
+    { "key": "icon",     "type": "pixmap", "rect": [2, 2, 40, 40], "zOrder": 1 },
+    { "key": "artist",   "type": "text",   "rect": [48, 9, 148, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
-    { "key": "track",    "type": "text",   "rect": [66, 34, 130, 28], "zOrder": 1,
+    { "key": "track",    "type": "text",   "rect": [4, 42, 192, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 600 },
       "text-overflow": "ellipsis", "color": "white" },
-    { "key": "progress", "type": "bar",    "rect": [8, 66, 184, 10], "zOrder": 1,
+    { "key": "progress", "type": "bar",    "rect": [8, 70, 184, 8], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
       "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
-    { "key": "elapsed",  "type": "text",   "rect": [8, 78, 80, 20], "zOrder": 1,
+    { "key": "elapsed",  "type": "text",   "rect": [8, 80, 80, 18], "zOrder": 1,
       "alignment": "left", "font": { "size": 12, "weight": 400 }, "color": "lightGray" },
-    { "key": "total",    "type": "text",   "rect": [112, 78, 80, 20], "zOrder": 1,
+    { "key": "total",    "type": "text",   "rect": [112, 80, 80, 18], "zOrder": 1,
       "alignment": "right", "font": { "size": 12, "weight": 400 }, "color": "lightGray" }
   ]
 }
 ```
+
+Layouts are not CSS: every item is an absolute rectangle on the 200 x 100
+canvas, text has only size, weight, alignment, colour, and overflow, and
+there is no padding, margin, or line height. Vertical placement of text
+inside its rectangle is the renderer's choice. Tightening the design means
+moving rectangles.
 
 Notes from the layout schema:
 - `text-overflow` accepts `clip`, `ellipsis`, `fade`; `ellipsis` is the default.
@@ -452,12 +457,14 @@ one too.
 `ArtRenderer` composites with SkiaSharp, the one place the StreamDeck-Tools
 dependency earns its place:
 
-- **Dial tile** (56 px, drawn 1:1): the art centre-cropped under rounded
+- **Dial tile** (40 px, drawn 1:1): the art centre-cropped under rounded
   corners, a uniform dark scrim over the whole tile, and the play/pause glyph
-  centred in white at about 60 percent of the tile. It spans both text rows on
-  the left, which is what makes it legible; the first version sat inside the
-  artist row at 28 px and read as a smudge. The text rows start at x 66, so
-  the title has 130 px instead of the full width, the price of art this size.
+  centred in white at about 60 percent of the tile. It sits in the top-left
+  with the artist beside it and the title directly beneath it at full width.
+  Two sizes were tried first: 28 px inside the artist row read as a smudge,
+  and 56 px spanning both rows cost the title a third of its width, which
+  lost most song titles. The 40 px stack is the compromise: the title row
+  moved down to y 42, the bar slimmed to 8 px, and the times rows to 18 px.
   It is sent as a `data:` URI in the pixmap item, only when the art or the
   state changes.
 - **Key image** (144 px): the art full-bleed with a dark translucent circle in
