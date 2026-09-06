@@ -680,6 +680,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
 2. Later candidates, not planned: long-touch or press-and-rotate mapped to
    seek, a luminance-aware glyph colour on the art, a proper plugin icon and
    Marketplace listing assets (section 13).
+3. Pressing with no session: today the command is rejected and the action
+   shows the alert triangle, because the media API can only control sessions
+   that exist. Left as is on 2026-09-06 pending real use. If it becomes a
+   problem, the design is a "when nothing is playing, open …" setting with a
+   pick list of players seen so far; Store apps launch by app id through
+   `shell:AppsFolder`, desktop apps would need a path.
 
 ## 13. Marketplace
 
