@@ -405,19 +405,19 @@ property inspector.
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
   "id": "com.jdlien.now-playing.layout",
   "items": [
-    { "key": "icon",     "type": "pixmap", "rect": [2, 2, 36, 36], "zOrder": 1 },
-    { "key": "artist",   "type": "text",   "rect": [44, 7, 152, 26], "zOrder": 1,
+    { "key": "icon",     "type": "pixmap", "rect": [4, 2, 36, 36], "zOrder": 1 },
+    { "key": "artist",   "type": "text",   "rect": [46, 7, 150, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
     { "key": "track",    "type": "text",   "rect": [4, 38, 192, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 600 },
       "text-overflow": "ellipsis", "color": "white" },
-    { "key": "progress", "type": "bar",    "rect": [8, 68, 184, 8], "zOrder": 1,
+    { "key": "progress", "type": "bar",    "rect": [4, 68, 192, 8], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
       "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
-    { "key": "elapsed",  "type": "text",   "rect": [8, 79, 80, 18], "zOrder": 1,
+    { "key": "elapsed",  "type": "text",   "rect": [4, 79, 80, 18], "zOrder": 1,
       "alignment": "left", "font": { "size": 12, "weight": 400 }, "color": "lightGray" },
-    { "key": "total",    "type": "text",   "rect": [112, 79, 80, 18], "zOrder": 1,
+    { "key": "total",    "type": "text",   "rect": [116, 79, 80, 18], "zOrder": 1,
       "alignment": "right", "font": { "size": 12, "weight": 400 }, "color": "lightGray" }
   ]
 }
@@ -465,7 +465,8 @@ dependency earns its place:
   56 px spanning both rows cost the title a third of its width and lost most
   song titles; 40 px pushed the title too far down. 36 px is where the
   vertical space felt evenly spread: title row at y 38, bar at 68 and 8 px
-  tall, times at 79. It is sent as a `data:` URI in the pixmap item, only
+  tall, times at 79. Tile, title, bar, and elapsed time share the left edge
+  at x 4, and the bar and total time end at the title's right edge at 196. It is sent as a `data:` URI in the pixmap item, only
   when the art or the state changes.
 - **Key image** (144 px): the art full-bleed with a dark translucent circle in
   the bottom-right corner and the glyph inside it. Without art, a large glyph

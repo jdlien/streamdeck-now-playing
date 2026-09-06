@@ -5,14 +5,14 @@
     {
       "key": "icon",
       "type": "pixmap",
-      "rect": [ 2, 2, 36, 36 ],
+      "rect": [ 4, 2, 36, 36 ],
       "zOrder": 1,
       "value": "imgs/icons/pause.svg"
     },
     {
       "key": "artist",
       "type": "text",
-      "rect": [ 44, 7, 152, 26 ],
+      "rect": [ 46, 7, 150, 26 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 400 },
@@ -34,7 +34,7 @@
     {
       "key": "progress",
       "type": "bar",
-      "rect": [ 8, 68, 184, 8 ],
+      "rect": [ 4, 68, 192, 8 ],
       "zOrder": 1,
       "subtype": 0,
       "border_w": 0,
@@ -47,7 +47,7 @@
     {
       "key": "elapsed",
       "type": "text",
-      "rect": [ 8, 79, 80, 18 ],
+      "rect": [ 4, 79, 80, 18 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 12, "weight": 400 },
@@ -58,7 +58,7 @@
     {
       "key": "total",
       "type": "text",
-      "rect": [ 112, 79, 80, 18 ],
+      "rect": [ 116, 79, 80, 18 ],
       "zOrder": 1,
       "alignment": "right",
       "font": { "size": 12, "weight": 400 },
