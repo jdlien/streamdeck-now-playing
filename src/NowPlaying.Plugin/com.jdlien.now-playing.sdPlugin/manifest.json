@@ -84,7 +84,7 @@
     },
     {
       "UUID": "com.jdlien.now-playing.brightness",
-      "Name": "Brightness",
+      "Name": "SD Brightness",
       "Tooltip": "Stream Deck screen brightness on the touch strip, in the same layout. Turn to adjust, press or tap to dim and restore.",
       "Icon": "imgs/actions/brightness/icon",
       "Controllers": [ "Encoder" ],

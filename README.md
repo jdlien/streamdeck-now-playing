@@ -51,7 +51,7 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   ends as the small labels. Turn to adjust (step size configurable), press or
   tap to mute. Follows the device Windows uses for playback and reflects
   changes made anywhere else, such as the keyboard or the tray.
-- **Brightness**, a fourth action for a dial, again in the same layout: a sun
+- **SD Brightness**, a fourth action for a dial, again in the same layout: a sun
   tile, the deck model on the top row, "Brightness 60%" on the full-width
   row, the bar as the level. Turn to adjust (step configurable, 2% default),
   press or tap to dim the screen to a 4% glow and back to the remembered
