@@ -885,7 +885,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
    reads through its `foo_beefweb` HTTP API later?
 2. HDR: whether the Display Brightness dial keeps working on the G95NC with
    Windows HDR on. Many monitors lock brightness in HDR mode; untested here.
-3. License for the public repository: none chosen yet.
+3. License: MIT, chosen 2026-09-06 (see the License section).
 4. Later candidates, not planned: separate press, tap, and hold gestures on
    the media dial (the events allow it; left and right tap zones for previous
    and next were considered and set aside as too cryptic without a visual
@@ -917,6 +917,14 @@ Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
   "accurately portray" anything), gallery screenshots, listing copy, and a
   name check against the existing "Current Media (Now Playing)" plugin;
   something like "Now Playing Dial" avoids the collision.
+
+## License
+
+MIT, see `LICENSE`. Third-party components ship under their own terms, all
+permissive: StreamDeck-Tools (MIT), NAudio (MIT), SkiaSharp (MIT),
+Newtonsoft.Json (MIT), NLog (BSD-3-Clause), and the bundled
+`pi/sdpi-components.js` (MIT, Corsair Memory Inc. and contributors, with Lit
+under BSD-3-Clause), whose license header stays in the file.
 
 ## References
 
