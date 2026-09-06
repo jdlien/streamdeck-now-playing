@@ -2,9 +2,18 @@ using NowPlaying.Media;
 
 namespace NowPlaying.Plugin;
 
-/// <summary>What the four layout items should show. Compared by value to skip redundant sends.</summary>
+/// <summary>What the layout items should show. Compared by value to skip redundant sends.</summary>
 /// <param name="Icon">Path of the icon image relative to the plugin folder, or null to hide it.</param>
-public sealed record FeedbackFrame(string? Icon, string Track, string Artist, bool BarEnabled, int BarValue);
+/// <param name="Elapsed">Elapsed time label, empty when there is no usable duration.</param>
+/// <param name="Total">Track length label, empty when there is no usable duration.</param>
+public sealed record FeedbackFrame(
+    string? Icon,
+    string Track,
+    string Artist,
+    bool BarEnabled,
+    int BarValue,
+    string Elapsed,
+    string Total);
 
 /// <summary>
 /// Pure mapping from a snapshot plus the wall clock to the layout's items
@@ -24,7 +33,7 @@ public static class FeedbackRenderer
     {
         if (snapshot.State == PlaybackState.None)
         {
-            return new FeedbackFrame(null, NoMediaText, "", false, 0);
+            return new FeedbackFrame(null, NoMediaText, "", false, 0, "", "");
         }
 
         var icon = snapshot.State is PlaybackState.Playing or PlaybackState.Changing ? PlayIcon : PauseIcon;
@@ -44,13 +53,17 @@ public static class FeedbackRenderer
 
         var barEnabled = false;
         var barValue = 0;
+        var elapsed = "";
+        var total = "";
         if (snapshot.Duration is { } duration && duration > TimeSpan.Zero && snapshot.EffectivePosition(now) is { } position)
         {
             barEnabled = true;
             barValue = (int)Math.Clamp(Math.Round(position.Ticks * (double)BarRange / duration.Ticks), 0, BarRange);
+            elapsed = Clock(position);
+            total = Clock(duration);
         }
 
-        return new FeedbackFrame(icon, track, artist, barEnabled, barValue);
+        return new FeedbackFrame(icon, track, artist, barEnabled, barValue, elapsed, total);
     }
 
     /// <summary>
@@ -88,7 +101,27 @@ public static class FeedbackRenderer
             };
         }
 
+        if (previous is null || previous.Elapsed != next.Elapsed)
+        {
+            payload["elapsed"] = next.Elapsed;
+        }
+
+        if (previous is null || previous.Total != next.Total)
+        {
+            payload["total"] = next.Total;
+        }
+
         return payload;
+    }
+
+    /// <summary>m:ss, or h:mm:ss from one hour. Whole seconds, floored, never negative.</summary>
+    public static string Clock(TimeSpan value)
+    {
+        var totalSeconds = Math.Max(0, (long)Math.Floor(value.TotalSeconds));
+        var hours = totalSeconds / 3600;
+        var minutes = totalSeconds % 3600 / 60;
+        var seconds = totalSeconds % 60;
+        return hours > 0 ? $"{hours}:{minutes:00}:{seconds:00}" : $"{minutes}:{seconds:00}";
     }
 
     /// <summary>A readable name from a SourceAppUserModelId, for sessions with no metadata yet.</summary>

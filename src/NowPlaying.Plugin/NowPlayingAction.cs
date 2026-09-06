@@ -43,7 +43,28 @@ public sealed class NowPlayingAction : EncoderBase
             Push(MediaHub.Current, full: true);
         };
 
-        // The first push is complete: the strip may show anything from before.
+        _ = ApplyLayoutAndPushAsync();
+    }
+
+    /// <summary>Path of the custom layout, relative to the plugin folder. Also named in the manifest.</summary>
+    private const string LayoutPath = "layouts/now-playing.json";
+
+    /// <summary>
+    /// Re-apply the layout file, then push everything. Setting the layout
+    /// explicitly means an edited layout takes effect on a plugin restart, and
+    /// the full push follows because the strip may show anything from before.
+    /// </summary>
+    private async Task ApplyLayoutAndPushAsync()
+    {
+        try
+        {
+            await Connection.SetFeedbackLayoutAsync(LayoutPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setFeedbackLayout failed: {ex.Message}");
+        }
+
         Push(MediaHub.Current, full: true);
     }
 

@@ -361,7 +361,7 @@ public sealed class MediaSessionService : IMediaSessionService
             next.Add(tracked);
         }
 
-        foreach (var gone in _sessions.Where(t => !next.Contains(t)).ToList())
+        foreach (var gone in _sessions.Where(t => !next.Contains(t) && !t.Detached).ToList())
         {
             Log($"session gone: {gone.AppId}");
             Detach(gone);
@@ -392,6 +392,7 @@ public sealed class MediaSessionService : IMediaSessionService
         }
 
         tracked.PlaybackHandler = null;
+        tracked.Detached = true;
     }
 
     private void AttachChosenEvents(Tracked tracked)
@@ -769,6 +770,7 @@ public sealed class MediaSessionService : IMediaSessionService
         public string AlbumArtist = "";
         public string AlbumTitle = "";
         public bool MetadataRead;
+        public bool Detached;
         public TypedEventHandler<Session, PlaybackInfoChangedEventArgs>? PlaybackHandler;
         public TypedEventHandler<Session, MediaPropertiesChangedEventArgs>? MediaHandler;
         public TypedEventHandler<Session, TimelinePropertiesChangedEventArgs>? TimelineHandler;

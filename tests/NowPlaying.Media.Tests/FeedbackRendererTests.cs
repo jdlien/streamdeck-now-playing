@@ -34,22 +34,24 @@ public class FeedbackRendererTests
         true);
 
     [Fact]
-    public void NoMediaHidesTheIconAndTheBar()
+    public void NoMediaHidesTheIconTheBarAndTheTimes()
     {
         var frame = FeedbackRenderer.Render(NowPlayingSnapshot.Empty, Now);
-        Assert.Equal(new FeedbackFrame(null, "No media", "", false, 0), frame);
+        Assert.Equal(new FeedbackFrame(null, "No media", "", false, 0, "", ""), frame);
 
         var payload = FeedbackRenderer.Diff(null, frame);
-        Assert.Equal(4, payload.Count);
+        Assert.Equal(6, payload.Count);
         var icon = Assert.IsType<Dictionary<string, object>>(payload["icon"]);
         Assert.Equal(false, icon["enabled"]);
         Assert.False(icon.ContainsKey("value"));
         var progress = Assert.IsType<Dictionary<string, object>>(payload["progress"]);
         Assert.Equal(false, progress["enabled"]);
+        Assert.Equal("", payload["elapsed"]);
+        Assert.Equal("", payload["total"]);
     }
 
     [Fact]
-    public void APausedTrackShowsThePauseIconAndAFrozenBar()
+    public void APausedTrackShowsThePauseIconAFrozenBarAndTheTimes()
     {
         var frame = FeedbackRenderer.Render(AppleMusicPaused, Now);
         Assert.Equal(FeedbackRenderer.PauseIcon, frame.Icon);
@@ -57,15 +59,19 @@ public class FeedbackRendererTests
         Assert.Equal("Michael Oakley — Prologue", frame.Artist);
         Assert.True(frame.BarEnabled);
         Assert.Equal(796, frame.BarValue); // 187 / 235 of 1000, rounded
+        Assert.Equal("3:07", frame.Elapsed);
+        Assert.Equal("3:55", frame.Total);
     }
 
     [Fact]
-    public void APlayingTrackAdvancesTheBarByTheAgeOfTheReport()
+    public void APlayingTrackAdvancesTheBarAndTheElapsedTimeByTheAgeOfTheReport()
     {
         var playing = AppleMusicPaused with { State = PlaybackState.Playing, PositionAt = Now - TimeSpan.FromSeconds(10) };
         var frame = FeedbackRenderer.Render(playing, Now);
         Assert.Equal(FeedbackRenderer.PlayIcon, frame.Icon);
         Assert.Equal(838, frame.BarValue); // 197 / 235 of 1000, rounded
+        Assert.Equal("3:17", frame.Elapsed);
+        Assert.Equal("3:55", frame.Total);
     }
 
     [Fact]
@@ -75,13 +81,15 @@ public class FeedbackRendererTests
     }
 
     [Fact]
-    public void NoDurationHidesTheBarButKeepsTheText()
+    public void NoDurationHidesTheBarAndTimesButKeepsTheText()
     {
         var frame = FeedbackRenderer.Render(FoobarPlaying, Now);
         Assert.Equal(FeedbackRenderer.PlayIcon, frame.Icon);
         Assert.Equal("Remember (ESCM 12' Mix)", frame.Track);
         Assert.Equal("BT", frame.Artist);
         Assert.False(frame.BarEnabled);
+        Assert.Equal("", frame.Elapsed);
+        Assert.Equal("", frame.Total);
     }
 
     [Fact]
@@ -108,7 +116,7 @@ public class FeedbackRendererTests
     }
 
     [Fact]
-    public void OnlyTheBarIsSentWhenOnlyThePositionMoved()
+    public void OnlyTheProgressItemsAreSentWhenOnlyThePositionMoved()
     {
         var playing = AppleMusicPaused with { State = PlaybackState.Playing, PositionAt = Now - TimeSpan.FromSeconds(10) };
         var before = FeedbackRenderer.Render(playing, Now);
@@ -116,19 +124,44 @@ public class FeedbackRendererTests
         Assert.Equal(838, before.BarValue); // 197 / 235
         Assert.Equal(860, after.BarValue);  // 202 / 235
         var payload = FeedbackRenderer.Diff(before, after);
-        Assert.Single(payload);
+        Assert.Equal(new[] { "elapsed", "progress" }, payload.Keys.Order());
         var progress = Assert.IsType<Dictionary<string, object>>(payload["progress"]);
         Assert.Equal(true, progress["enabled"]);
         Assert.Equal(860, progress["value"]);
+        Assert.Equal("3:22", payload["elapsed"]);
+    }
+
+    [Fact]
+    public void WithinTheSameSecondOnlyTheBarMoves()
+    {
+        var playing = AppleMusicPaused with { State = PlaybackState.Playing, PositionAt = Now - TimeSpan.FromSeconds(10) };
+        var before = FeedbackRenderer.Render(playing, Now);
+        var after = FeedbackRenderer.Render(playing, Now + TimeSpan.FromMilliseconds(400));
+        var payload = FeedbackRenderer.Diff(before, after);
+        Assert.False(payload.ContainsKey("elapsed"));
     }
 
     [Fact]
     public void AFullPushCarriesEveryItem()
     {
         var payload = FeedbackRenderer.Diff(null, FeedbackRenderer.Render(AppleMusicPaused, Now));
-        Assert.Equal(new[] { "artist", "icon", "progress", "track" }, payload.Keys.Order());
+        Assert.Equal(new[] { "artist", "elapsed", "icon", "progress", "total", "track" }, payload.Keys.Order());
         var icon = Assert.IsType<Dictionary<string, object>>(payload["icon"]);
         Assert.Equal(FeedbackRenderer.PauseIcon, icon["value"]);
+    }
+
+    [Theory]
+    [InlineData(0, "0:00")]
+    [InlineData(9, "0:09")]
+    [InlineData(65, "1:05")]
+    [InlineData(235, "3:55")]
+    [InlineData(3599.9, "59:59")]
+    [InlineData(3600, "1:00:00")]
+    [InlineData(3665, "1:01:05")]
+    [InlineData(-5, "0:00")]
+    public void ClockFormatsMinutesAndHours(double seconds, string expected)
+    {
+        Assert.Equal(expected, FeedbackRenderer.Clock(TimeSpan.FromSeconds(seconds)));
     }
 
     [Theory]

@@ -21,6 +21,8 @@ Display:
 - Song title on the top line, to the right of the icon.
 - Artist on the line below.
 - A playback progress bar underneath the text.
+- Elapsed time at the bottom left and track length at the bottom right, in
+  small text. Added 2026-09-06 after the first look at the strip.
 
 | Input | Action |
 | --- | --- |
@@ -311,6 +313,10 @@ seek, track change, or state change. So:
 - Enumerate `GetSessions()` by index and skip entries that fail. The list can
   change underneath the loop when an app closes, and one unreadable session
   must not blind the service to the others.
+- Session objects keep their identity across enumerations (verified across a
+  30 s re-sync with no churn), so a different object under the same app id
+  means the app restarted and its old event subscriptions are dead. The
+  service replaces the tracked session and re-subscribes.
 - On any read failure keep the previous snapshot and record the failure and
   its time. A broker that blinks should not blank the strip.
 - `PlaybackStatus` has six values: Closed, Opened, Changing, Stopped, Playing,
@@ -336,7 +342,7 @@ seek, track change, or state change. So:
 | --- | --- |
 | Apple Music | Artist field is `Artist — Album` (em dash) with AlbumTitle empty. Display verbatim in v1; if it needs to be shorter, prefer the part before the em dash. Registers an `Opened` session at launch that Windows calls current. Timeline refreshes about every second while playing and freezes on pause. |
 | foobar2000 | v2 registers a session with stock components; no plug-in needed. Title, artist, and thumbnail are correct; AlbumTitle is empty. Timeline is all zeros with a zero `LastUpdatedTime` even while playing, so the bar stays hidden. The control flags report next, previous, and toggle as enabled, so commands should work; confirm in milestone 1. The only known route to a position is its `foo_beefweb` HTTP API, which would be per-app code and is out of scope. |
-| Edge / Chrome | Registers one session per playing tab. Title comes from the page's Media Session API; Artist is often empty or the site name. Position depends on whether the site calls `setPositionState`; YouTube does. |
+| Chrome / Edge | App id is plain `Chrome`. Measured 2026-09-06 with YouTube: Title is the video title, Artist is the channel name, and the timeline is complete (position, duration, fresh `LastUpdatedTime`), so the bar and times work. Position depends on the site calling `setPositionState`; YouTube does, other sites may not. |
 
 ### 5.8 Borrowed from the ak820-pro keyboard agent
 
@@ -384,9 +390,13 @@ property inspector.
     { "key": "artist",   "type": "text",   "rect": [38, 36, 158, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 14, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
-    { "key": "progress", "type": "bar",    "rect": [8, 76, 184, 14], "zOrder": 1,
+    { "key": "progress", "type": "bar",    "rect": [8, 66, 184, 10], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
-      "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 }
+      "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
+    { "key": "elapsed",  "type": "text",   "rect": [8, 78, 80, 20], "zOrder": 1,
+      "alignment": "left", "font": { "size": 12, "weight": 400 }, "color": "lightGray" },
+    { "key": "total",    "type": "text",   "rect": [112, 78, 80, 20], "zOrder": 1,
+      "alignment": "right", "font": { "size": 12, "weight": 400 }, "color": "lightGray" }
   ]
 }
 ```
@@ -400,9 +410,10 @@ Notes from the layout schema:
   trapezoid, 4 groove (default).
 - `pixmap.value` accepts a file path relative to the plugin folder, a base64
   string, or an SVG string. The play and pause icons ship as SVG files.
-- Two lines of text is the practical limit at legible sizes. Elapsed and total
-  time labels do not fit alongside the bar without shrinking the text; they
-  stay out of v1.
+- Two lines of text is the practical limit at legible sizes for the title and
+  artist. The elapsed and total times sit under the bar at 12 px, as `m:ss`
+  or `h:mm:ss` from one hour; the bar moved up 10 px to make room. They are
+  blank whenever the bar is hidden.
 
 ### 6.2 States
 
@@ -511,8 +522,9 @@ Each milestone has an exit test. Do not start the next one until it passes.
    extrapolated position once a second, and it takes `next`, `prev`,
    `toggle`, `refresh`, `quit` on stdin. Verified live against Apple Music:
    pause and resume from the harness, position extrapolation, and the resume
-   correction. Still to run: a YouTube tab in Edge, and quitting and
-   relaunching Apple Music while `watch` runs.
+   correction. YouTube in Chrome verified on the Stream Deck app's preview.
+   Still to run: quitting and relaunching a player while `watch` runs, though
+   the plugin log already shows sessions coming and going cleanly.
 2. **Plugin skeleton.** Code done; needs the device. The plugin is linked in
    developer mode and its process launches and connects (Stream Deck log:
    "Plugin connected"). Exit still open: drag "Now Playing" from the "Now
@@ -539,7 +551,7 @@ app's side.
 
 ## 11. Validation
 
-Functional (run against Apple Music first, then Edge with YouTube, then
+Functional (run against Apple Music first, then Chrome with YouTube, then
 foobar2000, which needs no plug-in and should show text and icon with the bar
 hidden):
 
@@ -582,7 +594,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
    reads through its `foo_beefweb` HTTP API later?
 3. Later candidates, not planned: album art in the icon slot (thumbnail is
    already available), a preferred-player setting, long-touch or press-and-rotate
-   mapped to seek, elapsed/total labels.
+   mapped to seek.
 
 ## References
 

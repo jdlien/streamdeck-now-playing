@@ -20,16 +20,20 @@ public class FeedbackJsonTests
             "{\"icon\":{\"enabled\":true,\"value\":\"imgs/icons/pause.svg\"},"
             + "\"track\":\"Warriors of the Wasteland\","
             + "\"artist\":\"Michael Oakley — Prologue\","
-            + "\"progress\":{\"enabled\":true,\"value\":796}}",
+            + "\"progress\":{\"enabled\":true,\"value\":796},"
+            + "\"elapsed\":\"3:07\",\"total\":\"3:55\"}",
             json);
     }
 
     [Fact]
-    public void NoMediaHidesItemsWithBooleans()
+    public void NoMediaHidesItemsWithBooleansAndEmptyStrings()
     {
         var json = FeedbackJson.ToJObject(FeedbackRenderer.Diff(null, FeedbackRenderer.Render(NowPlayingSnapshot.Empty, DateTimeOffset.UnixEpoch)))
             .ToString(Formatting.None);
-        Assert.Equal("{\"icon\":{\"enabled\":false},\"track\":\"No media\",\"artist\":\"\",\"progress\":{\"enabled\":false,\"value\":0}}", json);
+        Assert.Equal(
+            "{\"icon\":{\"enabled\":false},\"track\":\"No media\",\"artist\":\"\","
+            + "\"progress\":{\"enabled\":false,\"value\":0},\"elapsed\":\"\",\"total\":\"\"}",
+            json);
     }
 
     [Fact]

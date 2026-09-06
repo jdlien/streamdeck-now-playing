@@ -34,7 +34,7 @@
     {
       "key": "progress",
       "type": "bar",
-      "rect": [ 8, 76, 184, 14 ],
+      "rect": [ 8, 66, 184, 10 ],
       "zOrder": 1,
       "subtype": 0,
       "border_w": 0,
@@ -43,6 +43,28 @@
       "bar_fill_c": "white",
       "value": 0,
       "enabled": false
+    },
+    {
+      "key": "elapsed",
+      "type": "text",
+      "rect": [ 8, 78, 80, 20 ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": { "size": 12, "weight": 400 },
+      "text-overflow": "clip",
+      "color": "lightGray",
+      "value": ""
+    },
+    {
+      "key": "total",
+      "type": "text",
+      "rect": [ 112, 78, 80, 20 ],
+      "zOrder": 1,
+      "alignment": "right",
+      "font": { "size": 12, "weight": 400 },
+      "text-overflow": "clip",
+      "color": "lightGray",
+      "value": ""
     }
   ]
 }
