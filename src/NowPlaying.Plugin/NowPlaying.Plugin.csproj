@@ -20,6 +20,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>NowPlaying.Plugin</RootNamespace>
     <AssemblyName>NowPlaying</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Debug builds land in the linked plugin folder. Release builds and publishes use the default bin/ so they never touch a running dev build. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <OutDir>$(MSBuildProjectDirectory)/com.jdlien.now-playing.sdPlugin/bin/</OutDir>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>

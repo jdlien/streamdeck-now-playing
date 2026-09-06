@@ -4,10 +4,12 @@ Design and implementation plan for a Windows plugin for the Elgato Stream Deck +
 It shows the current Windows media session (title, artist, play state, progress)
 on one dial's touch-strip segment and controls playback with that dial.
 
-Status: repository scaffolded 2026-09-06 with a building solution, a working
-`probe` command in the console harness, and a plugin skeleton that passes
-`streamdeck validate`. Milestone 1 (the media service) is next. Facts below
-were verified on this machine on 2026-09-06.
+Status (2026-09-06): milestone 1 is done and verified live; the display,
+input, and recovery code for milestones 3 to 5 is written and unit tested; the
+plugin is linked into the Stream Deck app in developer mode and its process
+connects. What remains needs eyes and hands on the device: place the action
+on a dial and run the checks in section 10. Facts below were verified on this
+machine on 2026-09-06.
 
 ## 1. Requested behavior
 
@@ -115,9 +117,16 @@ and paused:
    `com.jdlien.now-playing.dial`. Lowercase letters, digits, hyphens, and periods
    only.
 7. **Packaging.** `dotnet publish -c Release -r win-x64 --self-contained
-   -p:PublishSingleFile=true`, with `-p:PublishTrimmed=true` if the dependencies
-   allow it. Expect 15 to 30 MB trimmed, up to about 70 MB untrimmed. Package
-   with `streamdeck pack` into a `.streamDeckPlugin`.
+   -p:PublishSingleFile=true -p:PublishTrimmed=true`, then `streamdeck pack`
+   into a `.streamDeckPlugin`. Measured 2026-09-06, trimmed: `NowPlaying.exe`
+   20.7 MB plus `libSkiaSharp.dll` 11.6 MB, which SkiaSharp keeps as a
+   separate native file, plus an 84 MB `libSkiaSharp.pdb` that packaging must
+   delete. Three trim warnings come from StreamDeck-Tools' dependencies
+   (Newtonsoft, NLog); whether the trimmed build runs on the device is an
+   open milestone 6 check, with untrimmed as the fallback. SkiaSharp and
+   System.Drawing are dead weight here (this plugin never draws an image),
+   which is the case for the hand-rolled protocol client in decision 2 if
+   size ever matters.
 
 ## 4. Architecture
 
@@ -138,17 +147,25 @@ NowPlaying.slnx
 ### 4.1 Developer loop
 
 ```
-dotnet build NowPlaying.slnx
-dotnet run --project src/NowPlaying.Media.Cli -- probe          # add --json for machine output
-streamdeck validate src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin
+streamdeck dev                                                   # once: developer mode
 streamdeck link src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin   # once
-streamdeck restart com.jdlien.now-playing                        # after each build
+streamdeck validate src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin
+
+streamdeck stop com.jdlien.now-playing                           # the running plugin locks bin/NowPlaying.exe
+dotnet build NowPlaying.slnx
+dotnet test NowPlaying.slnx --no-build
+streamdeck restart com.jdlien.now-playing
+
+dotnet run --project src/NowPlaying.Media.Cli -- probe           # what Windows exposes right now; --json for machine output
+dotnet run --project src/NowPlaying.Media.Cli -- watch --ticks   # live snapshots; type next / prev / toggle / refresh / quit
 ```
 
-The plugin project builds straight into the `.sdPlugin/bin/` folder, so link
-once and restart after each build. StreamDeck-Tools writes `pluginlog.log`
-next to the exe; the Stream Deck app's own logs are in
-`%APPDATA%\Elgato\StreamDeck\logs`.
+Debug builds of the plugin land straight in the `.sdPlugin/bin/` folder, so
+link once, then stop, build, restart. A build while the plugin is running
+fails on the locked exe (measured: MSB3021 after ten retries). Release builds
+and publishes use the default `bin/` and never touch the linked folder.
+StreamDeck-Tools writes `pluginlog.log` next to the exe; the Stream Deck app's
+own logs are in `%APPDATA%\Elgato\StreamDeck\logs`.
 
 Runtime components inside the plugin process:
 
@@ -438,7 +455,7 @@ receives the same snapshot. Input from any instance drives the same session.
 | Stream Deck app restarts | Plugin process is restarted | Clean startup; nothing special. |
 | USB disconnect and reconnect | `deviceDidDisconnect`, `deviceDidConnect`, then `willAppear` per instance | Re-push the full payload on `willAppear`. |
 | Sleep and wake | `systemDidWakeUp` | Re-request the session manager, re-subscribe, re-push. |
-| Silent event loss | Watchdog: `Playing` but `LastUpdatedTime` unchanged for 60 s | Re-read the session directly; if it is gone, re-request the manager. |
+| Silent event loss | 30 s timer in the service | Cheap re-sync: re-enumerate sessions, re-rank, re-read the chosen session's status and timeline. Never reads metadata. A stale timeline alone is not treated as a fault, because some players legitimately go a whole track without a timeline event. |
 | Stream Deck app exits | WebSocket closes | Dispose the service (unsubscribe, stop ticker) and exit the process. No orphaned exe. |
 
 ## 9. Manifest sketch
@@ -489,26 +506,36 @@ arguments; StreamDeck-Tools consumes them in `SDWrapper.Run(args)`.
 
 Each milestone has an exit test. Do not start the next one until it passes.
 
-1. **Media library and console harness.** `NowPlaying.Media.Cli` prints a JSON
-   line for every snapshot change and accepts `next`, `prev`, `toggle` on
-   stdin. Exit: with Apple Music, track changes, external pause/resume, and
-   position extrapolation all show correctly; the same with a YouTube tab in
-   Edge; quitting and relaunching Apple Music recovers without restarting the
-   harness.
-2. **Plugin skeleton.** Manifest, layout, icons, StreamDeck-Tools host that
-   shows static text on the dial. Developer mode via `streamdeck dev`, folder
-   linked with `streamdeck link`, validated with `streamdeck validate`,
-   restarted with `streamdeck restart com.jdlien.now-playing`. Exit: the custom
-   layout renders on the rightmost dial with placeholder text and a half-full bar.
-3. **Wire display.** Service snapshots drive the renderer; state and metadata
-   update live; progress ticker on. Exit: section 6.2 states all reproduce.
-4. **Wire input.** Section 7 policies. Exit: single toggles per press and tap,
-   fast spin produces no backlog, disabled commands are dropped.
-5. **Recovery.** Section 8. Exit: each row's trigger recovers within a few
-   seconds without restarting anything.
-6. **Measure and package.** Section 11 measurements, then `dotnet publish` and
-   `streamdeck pack`. Exit: installs from the `.streamDeckPlugin` on a fresh
-   profile and works.
+1. **Media library and console harness.** Done 2026-09-06. `nowplaying-cli
+   watch` prints a line per significant snapshot change, `--ticks` prints the
+   extrapolated position once a second, and it takes `next`, `prev`,
+   `toggle`, `refresh`, `quit` on stdin. Verified live against Apple Music:
+   pause and resume from the harness, position extrapolation, and the resume
+   correction. Still to run: a YouTube tab in Edge, and quitting and
+   relaunching Apple Music while `watch` runs.
+2. **Plugin skeleton.** Code done; needs the device. The plugin is linked in
+   developer mode and its process launches and connects (Stream Deck log:
+   "Plugin connected"). Exit still open: drag "Now Playing" from the "Now
+   Playing" category onto the rightmost dial of page 1 and confirm the custom
+   layout renders. With nothing playing it should show a hidden icon,
+   `No media`, and no bar.
+3. **Wire display.** Code done (`FeedbackRenderer`, `MediaHub`,
+   `NowPlayingAction.OnTick`), unit tested. Exit still open: the section 6.2
+   states on the strip, progress advancing once a second, freezing on pause.
+4. **Wire input.** Code done. Exit still open: one toggle per press and per
+   tap, no toggle on release or on a long touch, one skip per detent, a fast
+   spin with no backlog, rotation while pressed ignored.
+5. **Recovery.** Code done for wake and device reconnect (full media refresh
+   and full re-push). Exit still open: the section 8 rows on the device.
+6. **Measure and package.** Not started. Section 11 measurements, then
+   `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true`
+   into the sdPlugin `bin/`, then `streamdeck pack`. Exit: installs from the
+   `.streamDeckPlugin` on a fresh profile and works.
+
+When a check fails, `bin/pluginlog.log` in the sdPlugin folder has the
+plugin's own log (media events are tagged `[media]`, action events
+`[action]`), and `%APPDATA%\Elgato\StreamDeck\logs\StreamDeck.log` has the
+app's side.
 
 ## 11. Validation
 

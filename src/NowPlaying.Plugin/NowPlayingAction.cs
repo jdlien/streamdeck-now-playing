@@ -1,6 +1,5 @@
 using BarRaider.SdTools;
 using BarRaider.SdTools.Payloads;
-using Newtonsoft.Json.Linq;
 using NowPlaying.Media;
 
 namespace NowPlaying.Plugin;
@@ -147,7 +146,7 @@ public sealed class NowPlayingAction : EncoderBase
     {
         try
         {
-            await Connection.SetFeedbackAsync(JObject.FromObject(payload));
+            await Connection.SetFeedbackAsync(FeedbackJson.ToJObject(payload));
         }
         catch (Exception ex)
         {
