@@ -60,9 +60,10 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   brightness command (see 5.10).
 - **Display Brightness**, a fifth action for a dial: one monitor's brightness
   over DDC/CI, with the monitor's real name from its EDID on the top row.
-  Each dial picks its own monitor, so two dials can serve two monitors. Turn
-  to adjust (2% default); press, tap, and hold are separately configurable
-  between dim and restore, next monitor, previous monitor, and nothing.
+  Each dial picks its own screen, so two dials can serve two monitors, and
+  the Stream Deck itself can be one of the screens in the cycle. Turn to
+  adjust (2% default); press, tap, and hold are separately configurable
+  between dim and restore, next screen, previous screen, and nothing.
   Changes made on the monitor's own menu are picked up by a periodic re-read
   (see 5.11).
 
@@ -176,7 +177,7 @@ NowPlaying.slnx
     NowPlayingKeyAction.cs       the key action
     VolumeAction.cs              the volume dial; VolumeHub.cs, VolumeRenderer.cs alongside
     BrightnessAction.cs          the SD brightness dial; BrightnessHub.cs, BrightnessRenderer.cs, GlobalSettingsStore.cs alongside
-    DisplayBrightnessAction.cs   the monitor brightness dial; DisplayBrightnessHub.cs, DisplayBrightnessRenderer.cs alongside
+    DisplayBrightnessAction.cs   the display brightness dial; DisplayBrightnessHub.cs, DisplayBrightnessRenderer.cs, DisplayTargets.cs alongside
     FeedbackRenderer.cs          snapshot -> layout items, diffed (pure)
     ArtRenderer.cs               album art + glyph compositing with SkiaSharp (pure)
     MediaHub.cs                  the one shared media service
@@ -543,7 +544,17 @@ percent.
   named one that is unplugged shows "Name not connected", and with none the
   strip shows "No DDC/CI monitor" and every command alerts. Measured
   2026-09-06 with two monitors: Odyssey G95NC on 0..50 and a Samsung SF10T
-  on 0..100, both answering, the primary written independently.
+  on 0..100, both answering, the primary written independently, and cycling
+  between them confirmed on the hardware.
+- **The Stream Deck as a screen.** With "include the Stream Deck's own
+  screen" on (the default), the deck is the last stop in the cycle and shows
+  the sun tile from SD Brightness so it reads differently from a monitor; a
+  dial can also be bound to it explicitly from the Monitor select regardless
+  of the option. Adjust and dim then go through the same HID path and
+  persisted level as SD Brightness, so the two stay in step. SD Brightness
+  remains a dedicated action by design: a fixed deck dial next to a cycling
+  display dial is a reasonable desk. `DisplayTargets` holds the pure
+  ordering and wrapping rules, unit tested.
 
 Known limits to test: HDR mode locks brightness on many monitors, some ship
 with DDC/CI off in their menu, and USB-C docks and KVMs can drop it.

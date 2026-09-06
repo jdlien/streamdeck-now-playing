@@ -3,9 +3,9 @@ using NowPlaying.Device;
 namespace NowPlaying.Plugin;
 
 /// <summary>
-/// Maps a monitor's brightness onto the shared six-item layout, plus the
+/// Maps a target's brightness onto the shared six-item layout, plus the
 /// layout's seventh item: a small right-aligned "1/2" badge at the end of
-/// the name row when more than one monitor answers.
+/// the name row when there is more than one target to cycle through.
 /// </summary>
 public static class DisplayBrightnessRenderer
 {
@@ -28,7 +28,11 @@ public static class DisplayBrightnessRenderer
             "100");
     }
 
-    /// <summary>"1/2" when there is a choice of monitors; empty otherwise, so the badge item disappears.</summary>
+    /// <summary>"1/2" when there is a choice of targets; empty otherwise, so the badge item disappears.</summary>
     public static string MonitorBadge(DisplayBrightnessSnapshot snapshot) =>
         snapshot.Available && snapshot.Count > 1 ? $"{snapshot.Index + 1}/{snapshot.Count}" : "";
+
+    /// <summary>The Stream Deck's own brightness in the same shape as a monitor's, so one renderer serves both.</summary>
+    public static DisplayBrightnessSnapshot FromStreamDeck(BrightnessState state, string deviceName, int index, int count) =>
+        new(deviceName, state.Level, state.Dimmed, true, index, count);
 }

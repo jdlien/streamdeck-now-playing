@@ -6,11 +6,12 @@ using NowPlaying.Device;
 namespace NowPlaying.Plugin;
 
 /// <summary>
-/// The display brightness dial, in the shared layout: one monitor's
-/// brightness over DDC/CI. Each instance binds to a monitor of its own
-/// (automatic = the primary), so two dials can serve two monitors. Turn to
-/// adjust; press, tap, and hold each run a configurable gesture: dim and
-/// restore, next monitor, previous monitor, or nothing.
+/// The display brightness dial, in the shared layout. Each instance binds
+/// to a target of its own: a monitor over DDC/CI (automatic = the primary),
+/// or the Stream Deck's own screen. Turn to adjust; press, tap, and hold
+/// each run a configurable gesture: dim and restore, next target, previous
+/// target, or nothing. The Stream Deck can be included in the cycle, which
+/// makes this one dial cover every screen on the desk.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.display-brightness")]
 public sealed class DisplayBrightnessAction : EncoderBase
@@ -21,6 +22,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
     private const string PressKey = "pressAction";
     private const string TapKey = "tapAction";
     private const string HoldKey = "holdAction";
+    private const string IncludeStreamDeckKey = "includeStreamDeck";
     private const string GestureDim = "dim";
     private const string GestureNext = "next";
     private const string GesturePrevious = "previous";
@@ -29,13 +31,16 @@ public sealed class DisplayBrightnessAction : EncoderBase
     private static readonly string[] Gestures = [GestureDim, GestureNext, GesturePrevious, GestureNone];
 
     private readonly object _gate = new();
-    private readonly Action<string, DisplayBrightnessSnapshot> _onChanged;
+    private readonly Action<string, DisplayBrightnessSnapshot> _onMonitorChanged;
     private readonly Action _onMonitorsChanged;
-    private readonly Dictionary<bool, string> _tileCache = new();
+    private readonly Action<BrightnessState> _onStreamDeckChanged;
+    private readonly Dictionary<string, string> _tileCache = new();
+    private readonly string _deviceName;
     private JObject _settings = new();
     private FeedbackFrame? _lastFrame;
     private string? _lastBadge;
-    private string _monitor = ""; // "" = automatic (primary)
+    private string _binding = DisplayTargets.Automatic;
+    private bool _includeStreamDeck = true;
     private int _stepPercent = 2;
     private string _press = GestureDim;
     private string _tap = GestureNext;
@@ -46,39 +51,91 @@ public sealed class DisplayBrightnessAction : EncoderBase
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness appear: context {connection.ContextId}");
 
+        string? deviceType = null;
+        try
+        {
+            deviceType = connection.DeviceInfo()?.Type.ToString();
+        }
+        catch
+        {
+        }
+
+        _deviceName = BrightnessRenderer.DeviceName(deviceType);
+
         ApplySettings(payload.Settings, writeBackDefaults: true);
         PropertyInspectorBridge.Attach(connection);
 
-        _onChanged = (name, snapshot) =>
+        _onMonitorChanged = (name, _) =>
         {
-            if (string.Equals(name, DisplayBrightnessHub.Resolve(Monitor), StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(name, ResolvedTarget(), StringComparison.OrdinalIgnoreCase))
             {
-                Push(snapshot, full: false);
+                Push(Current, full: false);
             }
         };
         _onMonitorsChanged = () => Push(Current, full: false);
-        DisplayBrightnessHub.Changed += _onChanged;
+        _onStreamDeckChanged = _ =>
+        {
+            if (ResolvedTarget() == DisplayTargets.StreamDeck)
+            {
+                Push(Current, full: false);
+            }
+        };
+        DisplayBrightnessHub.Changed += _onMonitorChanged;
         DisplayBrightnessHub.MonitorsChanged += _onMonitorsChanged;
+        BrightnessHub.Changed += _onStreamDeckChanged;
         DisplayBrightnessHub.Attach();
+        BrightnessHub.Attach();
+        _ = connection.GetGlobalSettingsAsync();
 
-        connection.OnSystemDidWakeUp += (_, _) => DisplayBrightnessHub.Refresh();
-        connection.OnDeviceDidConnect += (_, _) => Push(Current, full: true);
+        connection.OnSystemDidWakeUp += (_, _) =>
+        {
+            DisplayBrightnessHub.Refresh();
+            BrightnessHub.Reapply();
+        };
+        connection.OnDeviceDidConnect += (_, _) =>
+        {
+            BrightnessHub.Reapply();
+            Push(Current, full: true);
+        };
 
         _ = ApplyLayoutAndPushAsync();
     }
 
-    private string Monitor
+    // -- the target -----------------------------------------------------------
+
+    private (string Binding, bool IncludeStreamDeck) BindingSnapshot()
     {
-        get
+        lock (_gate)
         {
-            lock (_gate)
-            {
-                return _monitor;
-            }
+            return (_binding, _includeStreamDeck);
         }
     }
 
-    private DisplayBrightnessSnapshot Current => DisplayBrightnessHub.Get(Monitor);
+    /// <summary>The concrete target this dial controls right now: a monitor name, the Stream Deck, or null.</summary>
+    private string? ResolvedTarget()
+    {
+        var (binding, include) = BindingSnapshot();
+        return DisplayTargets.Resolve(binding, DisplayBrightnessHub.MonitorNames, include);
+    }
+
+    private DisplayBrightnessSnapshot Current
+    {
+        get
+        {
+            var (binding, include) = BindingSnapshot();
+            var monitors = DisplayBrightnessHub.MonitorNames;
+            var target = DisplayTargets.Resolve(binding, monitors, include);
+            var (index, count) = DisplayTargets.Position(target, monitors, include);
+
+            if (target == DisplayTargets.StreamDeck)
+            {
+                return DisplayBrightnessRenderer.FromStreamDeck(BrightnessHub.Current, _deviceName, Math.Max(0, index - 1), count);
+            }
+
+            var snapshot = DisplayBrightnessHub.Get(binding);
+            return snapshot.Available ? snapshot with { Index = Math.Max(0, index - 1), Count = count } : snapshot;
+        }
+    }
 
     private async Task ApplyLayoutAndPushAsync()
     {
@@ -109,7 +166,15 @@ public sealed class DisplayBrightnessAction : EncoderBase
             step = _stepPercent;
         }
 
-        if (!DisplayBrightnessHub.Adjust(Monitor, payload.Ticks * step))
+        var delta = payload.Ticks * step;
+        if (ResolvedTarget() == DisplayTargets.StreamDeck)
+        {
+            var state = BrightnessHub.Adjust(delta);
+            _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.BrightnessKey, state.Level);
+            return;
+        }
+
+        if (!DisplayBrightnessHub.Adjust(BindingSnapshot().Binding, delta))
         {
             _ = Connection.ShowAlert();
         }
@@ -141,7 +206,12 @@ public sealed class DisplayBrightnessAction : EncoderBase
         switch (gesture)
         {
             case GestureDim:
-                if (!DisplayBrightnessHub.Toggle(Monitor))
+                if (ResolvedTarget() == DisplayTargets.StreamDeck)
+                {
+                    var state = BrightnessHub.Toggle();
+                    _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.BrightnessKey, state.Level);
+                }
+                else if (!DisplayBrightnessHub.Toggle(BindingSnapshot().Binding))
                 {
                     _ = Connection.ShowAlert();
                 }
@@ -150,10 +220,11 @@ public sealed class DisplayBrightnessAction : EncoderBase
 
             case GestureNext:
             case GesturePrevious:
-                var target = DisplayBrightnessHub.Neighbor(Monitor, gesture == GestureNext ? 1 : -1);
+                var (binding, include) = BindingSnapshot();
+                var target = DisplayTargets.Neighbor(binding, DisplayBrightnessHub.MonitorNames, include, gesture == GestureNext ? 1 : -1);
                 if (target is null)
                 {
-                    _ = Connection.ShowAlert(); // one monitor, or none: nothing to move to
+                    _ = Connection.ShowAlert(); // one target, or none: nothing to move to
                     return;
                 }
 
@@ -165,18 +236,18 @@ public sealed class DisplayBrightnessAction : EncoderBase
         }
     }
 
-    /// <summary>Point this dial at a monitor by name and remember it in the action's settings.</summary>
-    private void BindTo(string monitorName)
+    /// <summary>Point this dial at a target and remember it in the action's settings.</summary>
+    private void BindTo(string target)
     {
         JObject settings;
         lock (_gate)
         {
-            _monitor = monitorName;
-            _settings[MonitorKey] = monitorName;
+            _binding = target;
+            _settings[MonitorKey] = target;
             settings = (JObject)_settings.DeepClone();
         }
 
-        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness bound to {monitorName}");
+        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness bound to {target}");
         _ = Connection.SetSettingsAsync(settings);
         Push(Current, full: false);
     }
@@ -189,10 +260,11 @@ public sealed class DisplayBrightnessAction : EncoderBase
 
     private void Push(DisplayBrightnessSnapshot snapshot, bool full)
     {
+        var isStreamDeck = ResolvedTarget() == DisplayTargets.StreamDeck;
         Dictionary<string, object> payload;
         lock (_gate)
         {
-            var frame = DisplayBrightnessRenderer.Render(snapshot, TileFor(snapshot.Dimmed || !snapshot.Available));
+            var frame = DisplayBrightnessRenderer.Render(snapshot, TileFor(isStreamDeck, snapshot.Dimmed || !snapshot.Available));
             payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
 
@@ -213,12 +285,15 @@ public sealed class DisplayBrightnessAction : EncoderBase
         _ = SendAsync(payload);
     }
 
-    private string TileFor(bool dimmed)
+    /// <summary>Monitor or sun tile, lit or dimmed, rendered once each. Call under the gate.</summary>
+    private string TileFor(bool streamDeck, bool dimmed)
     {
-        if (!_tileCache.TryGetValue(dimmed, out var dataUri))
+        var key = $"{(streamDeck ? "deck" : "monitor")}:{(dimmed ? "dim" : "on")}";
+        if (!_tileCache.TryGetValue(key, out var dataUri))
         {
-            dataUri = ArtRenderer.ToDataUri(ArtRenderer.RenderMonitorTile(dimmed));
-            _tileCache[dimmed] = dataUri;
+            var png = streamDeck ? ArtRenderer.RenderBrightnessTile(dimmed) : ArtRenderer.RenderMonitorTile(dimmed);
+            dataUri = ArtRenderer.ToDataUri(png);
+            _tileCache[key] = dataUri;
         }
 
         return dataUri;
@@ -252,19 +327,21 @@ public sealed class DisplayBrightnessAction : EncoderBase
         {
             _settings = settings is null ? new JObject() : (JObject)settings.DeepClone();
             var monitor = SettingsReader.GetString(settings, MonitorKey, PropertyInspectorBridge.AutomaticValue);
-            _monitor = monitor == PropertyInspectorBridge.AutomaticValue ? "" : monitor;
+            _binding = monitor == PropertyInspectorBridge.AutomaticValue ? DisplayTargets.Automatic : monitor;
+            _includeStreamDeck = SettingsReader.GetBool(settings, IncludeStreamDeckKey, fallback: true);
             _stepPercent = int.Parse(SettingsReader.GetString(settings, StepKey, "2", Steps));
             _press = SettingsReader.GetString(settings, PressKey, GestureDim, Gestures);
             _tap = SettingsReader.GetString(settings, TapKey, GestureNext, Gestures);
             _hold = SettingsReader.GetString(settings, HoldKey, GesturePrevious, Gestures);
         }
 
-        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, MonitorKey, StepKey, PressKey, TapKey, HoldKey))
+        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, MonitorKey, IncludeStreamDeckKey, StepKey, PressKey, TapKey, HoldKey))
         {
             JObject filled;
             lock (_gate)
             {
-                _settings[MonitorKey] = _monitor.Length == 0 ? PropertyInspectorBridge.AutomaticValue : _monitor;
+                _settings[MonitorKey] = _binding.Length == 0 ? PropertyInspectorBridge.AutomaticValue : _binding;
+                _settings[IncludeStreamDeckKey] = _includeStreamDeck;
                 _settings[StepKey] = _stepPercent.ToString();
                 _settings[PressKey] = _press;
                 _settings[TapKey] = _tap;
@@ -278,8 +355,9 @@ public sealed class DisplayBrightnessAction : EncoderBase
 
     public override void Dispose()
     {
-        DisplayBrightnessHub.Changed -= _onChanged;
+        DisplayBrightnessHub.Changed -= _onMonitorChanged;
         DisplayBrightnessHub.MonitorsChanged -= _onMonitorsChanged;
+        BrightnessHub.Changed -= _onStreamDeckChanged;
         Logger.Instance.LogMessage(TracingLevel.INFO, "[action] display brightness disappear");
     }
 }

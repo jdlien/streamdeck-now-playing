@@ -63,6 +63,7 @@ internal static class PropertyInspectorBridge
                     items.Add(new JObject { ["label"] = monitor, ["value"] = monitor });
                 }
 
+                items.Add(new JObject { ["label"] = "Stream Deck (this device)", ["value"] = DisplayTargets.StreamDeck });
                 Reply(connection, MonitorsDataSource, items);
                 break;
             }

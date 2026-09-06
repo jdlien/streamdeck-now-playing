@@ -11,6 +11,10 @@
                  loading="Looking for monitors…" placeholder="Automatic (primary monitor)"></sdpi-select>
   </sdpi-item>
 
+  <sdpi-item label="Cycle">
+    <sdpi-checkbox setting="includeStreamDeck" default="true" label="Include the Stream Deck's own screen"></sdpi-checkbox>
+  </sdpi-item>
+
   <sdpi-item label="Step per click">
     <sdpi-select setting="step" default="2">
       <option value="1">1%</option>
@@ -48,7 +52,7 @@
   </sdpi-item>
 
   <sdpi-item label="">
-    <small>Controls one monitor's brightness over DDC/CI, the same channel the monitor's own menu uses. Each dial has its own monitor, so two dials can serve two monitors; "next" and "previous" move this dial to another monitor that answers and remember it. If a monitor is missing from the list, enable DDC/CI in its menu; HDR mode may also lock brightness on some monitors.</small>
+    <small>Controls one screen's brightness: a monitor over DDC/CI, the same channel the monitor's own menu uses, or the Stream Deck itself. Each dial has its own target, so two dials can serve two screens; "next" and "previous" move this dial through the list and remember the choice. If a monitor is missing from the list, enable DDC/CI in its menu; HDR mode may also lock brightness on some monitors.</small>
   </sdpi-item>
 </body>
 </html>

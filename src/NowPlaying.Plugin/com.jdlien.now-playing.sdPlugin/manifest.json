@@ -108,7 +108,7 @@
     {
       "UUID": "com.jdlien.now-playing.display-brightness",
       "Name": "Display Brightness",
-      "Tooltip": "A monitor's brightness over DDC/CI, in the same layout. Each dial picks its own monitor. Turn to adjust; press, tap, and hold are configurable: dim and restore, next or previous monitor.",
+      "Tooltip": "Brightness of a monitor (over DDC/CI) or of the Stream Deck itself, in the same layout. Each dial picks its own screen and can cycle through all of them. Turn to adjust; press, tap, and hold are configurable.",
       "Icon": "imgs/actions/display-brightness/icon",
       "Controllers": [ "Encoder" ],
       "PropertyInspectorPath": "pi/display-brightness.html",
@@ -117,8 +117,8 @@
         "TriggerDescription": {
           "Rotate": "Brightness",
           "Push": "Dim / restore",
-          "Touch": "Next monitor",
-          "LongTouch": "Previous monitor"
+          "Touch": "Next screen",
+          "LongTouch": "Previous screen"
         }
       },
       "States": [
