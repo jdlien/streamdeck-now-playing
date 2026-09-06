@@ -417,10 +417,10 @@ property inspector.
     { "key": "progress", "type": "bar",    "rect": [4, 68, 192, 8], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
       "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
-    { "key": "elapsed",  "type": "text",   "rect": [4, 79, 80, 18], "zOrder": 1,
-      "alignment": "left", "font": { "size": 12, "weight": 400 }, "color": "lightGray" },
-    { "key": "total",    "type": "text",   "rect": [116, 79, 80, 18], "zOrder": 1,
-      "alignment": "right", "font": { "size": 12, "weight": 400 }, "color": "lightGray" }
+    { "key": "elapsed",  "type": "text",   "rect": [4, 78, 80, 20], "zOrder": 1,
+      "alignment": "left", "font": { "size": 14, "weight": 400 }, "color": "lightGray" },
+    { "key": "total",    "type": "text",   "rect": [116, 78, 80, 20], "zOrder": 1,
+      "alignment": "right", "font": { "size": 14, "weight": 400 }, "color": "lightGray" }
   ]
 }
 ```
@@ -444,9 +444,9 @@ Notes from the layout schema:
 - `pixmap.value` accepts a file path relative to the plugin folder, a base64
   string, or an SVG string. The play and pause icons ship as SVG files.
 - Two lines of text is the practical limit at legible sizes for the title and
-  artist. The elapsed and total times sit under the bar at 12 px, as `m:ss`
-  or `h:mm:ss` from one hour; the bar moved up 10 px to make room. They are
-  blank whenever the bar is hidden.
+  artist. The elapsed and total times sit under the bar at 14 px (12 px was
+  close to illegible on the hardware), as `m:ss` or `h:mm:ss` from one hour.
+  They are blank whenever the bar is hidden.
 
 ### 6.1.1 Album art and the key image
 
@@ -471,16 +471,22 @@ dependency earns its place:
   at x 4, and the bar and total time end at the title's right edge at 196. It is sent as a `data:` URI in the pixmap item, only
   when the art or the state changes.
 - **Key image** (144 px): the art full-bleed with a dark translucent circle in
-  the bottom-right corner and the glyph inside it. Without art, a large glyph
-  on the dark background; with no media, the glyph dimmed.
+  the top-right corner and the glyph inside it. The title (up to two lines,
+  20 px semibold, word-wrapped, ellipsized) and the artist (16 px) are drawn
+  left-aligned over a dark gradient along the bottom. The app's own title
+  renderer was tried first and only centres and clips, which loses both ends
+  of a long title on the hardware; drawing the text ourselves keeps the
+  beginning. Segoe UI, with a system fallback face when the text needs a
+  script it lacks. Without art, a large glyph on the dark background; with no
+  media, the glyph dimmed and no text.
 - **Legibility** comes from the fixed scrim under a white glyph rather than
   from estimating the art's brightness: every cover gets the same treatment,
   and it never flips between tracks. The pixels are ours, so sampling the
   region under the glyph and switching to a dark glyph on light art is a small
   later addition if some covers still fight the scrim.
 
-The key's title is set through the app's own title mechanism, so the user's
-font and alignment settings apply and a `showTitle` setting turns it off.
+The key declares `UserTitleEnabled: false`, so the app draws no title of its
+own; a `showTitle` setting turns the drawn title and artist off.
 
 ### 6.2 States
 

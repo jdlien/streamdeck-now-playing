@@ -47,18 +47,17 @@
     {
       "UUID": "com.jdlien.now-playing.key",
       "Name": "Now Playing Key",
-      "Tooltip": "Album art and play state on a key. Press for play/pause, hold for next track; both configurable.",
+      "Tooltip": "Album art, title, and play state on a key. Press for play/pause, hold for next track; both configurable.",
       "Icon": "imgs/actions/now-playing-key/icon",
       "Controllers": [ "Keypad" ],
       "PropertyInspectorPath": "pi/key.html",
       "States": [
         {
-          "Image": "imgs/actions/now-playing-key/key",
-          "TitleAlignment": "bottom",
-          "FontSize": 9
+          "Image": "imgs/actions/now-playing-key/key"
         }
       ],
-      "SupportedInMultiActions": false
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false
     }
   ]
 }

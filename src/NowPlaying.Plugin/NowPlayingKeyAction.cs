@@ -6,10 +6,10 @@ namespace NowPlaying.Plugin;
 
 /// <summary>
 /// The key action, for decks without a dial and for anyone who wants the
-/// art on a key: album art with a play/pause badge, the title in the key's
-/// own title field, a configurable press, and a long press for a second
-/// command. The Stream Deck app already ships plain transport keys, so this
-/// key's value is showing what is playing.
+/// art on a key: album art with a play/pause badge, the title and artist
+/// drawn into the image, a configurable press, and a long press for a
+/// second command. The Stream Deck app already ships plain transport keys,
+/// so this key's value is showing what is playing.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.key")]
 public sealed class NowPlayingKeyAction : KeypadBase
@@ -32,8 +32,7 @@ public sealed class NowPlayingKeyAction : KeypadBase
     private bool _showTitle = true;
     private Artwork? _artwork;
     private DateTimeOffset? _pressedAt;
-    private (PlaybackState State, string? ArtKey, bool ShowArt)? _lastImage;
-    private string? _lastTitle;
+    private (PlaybackState State, string? ArtKey, bool ShowArt, string Title, string Artist)? _lastImage;
 
     public NowPlayingKeyAction(SDConnection connection, InitialPayload payload)
         : base(connection, payload)
@@ -116,45 +115,34 @@ public sealed class NowPlayingKeyAction : KeypadBase
     {
     }
 
-    /// <summary>Re-render the image and title if what they depend on changed.</summary>
+    /// <summary>Re-render the image if anything it depends on changed.</summary>
     private void Refresh(bool force = false)
     {
         var snapshot = MediaHub.Current;
         byte[]? png = null;
-        string? title = null;
 
         lock (_gate)
         {
-            var imageKey = (snapshot.State, _showArt ? _artwork?.Key : null, _showArt);
+            var title = _showTitle ? snapshot.Title : "";
+            var artist = _showTitle ? snapshot.Artist : "";
+            var imageKey = (snapshot.State, _showArt ? _artwork?.Key : null, _showArt, title, artist);
             if (force || _lastImage != imageKey)
             {
                 try
                 {
-                    png = ArtRenderer.RenderKey(snapshot.State, _showArt ? _artwork?.Bytes : null);
+                    png = ArtRenderer.RenderKey(snapshot.State, _showArt ? _artwork?.Bytes : null, title, artist);
                     _lastImage = imageKey;
                 }
                 catch (Exception ex)
                 {
-                    Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] key art render failed: {ex.Message}");
+                    Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] key render failed: {ex.Message}");
                 }
-            }
-
-            var wantedTitle = _showTitle && snapshot.State != PlaybackState.None ? snapshot.Title : "";
-            if (force || wantedTitle != _lastTitle)
-            {
-                title = wantedTitle;
-                _lastTitle = wantedTitle;
             }
         }
 
         if (png is not null)
         {
             _ = SendImageAsync(png);
-        }
-
-        if (title is not null)
-        {
-            _ = SendTitleAsync(title);
         }
     }
 
@@ -167,18 +155,6 @@ public sealed class NowPlayingKeyAction : KeypadBase
         catch (Exception ex)
         {
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setImage failed: {ex.Message}");
-        }
-    }
-
-    private async Task SendTitleAsync(string title)
-    {
-        try
-        {
-            await Connection.SetTitleAsync(title, null);
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setTitle failed: {ex.Message}");
         }
     }
 
