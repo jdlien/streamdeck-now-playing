@@ -4,12 +4,15 @@ Design and implementation plan for a Windows plugin for the Elgato Stream Deck +
 It shows the current Windows media session (title, artist, play state, progress)
 on one dial's touch-strip segment and controls playback with that dial.
 
-Status (2026-09-06): milestone 1 is done and verified live; the display,
-input, and recovery code for milestones 3 to 5 is written and unit tested; the
-plugin is linked into the Stream Deck app in developer mode and its process
-connects. What remains needs eyes and hands on the device: place the action
-on a dial and run the checks in section 10. Facts below were verified on this
-machine on 2026-09-06.
+Status (end of 2026-09-06): working and in daily use on the hardware. Five
+actions: Now Playing (dial), Now Playing Key, Volume, SD Brightness, and
+Display Brightness, all in one shared touch-strip layout, verified on a
+Stream Deck + with Apple Music, foobar2000, YouTube in Chrome, two DDC/CI
+monitors, and the deck's own screen. 144 unit tests. Version 0.5.0.0 in
+the manifest, linked in developer mode. What remains is milestone 6 in
+section 10: packaging, a clean-profile install, the resource measurements,
+and the Marketplace items in section 13, plus a LICENSE for the repo. Facts
+below were verified on this machine on 2026-09-06.
 
 ## 1. Requested behavior
 
@@ -80,6 +83,8 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
 | Apple Music (Store) | Registers a session. App id `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`. Primary test player. |
 | foobar2000 2.25.10 | Registers a session natively as `foobar2000.exe`; v2 gained this, no plug-in needed. Measured here on 2026-09-06 (and in `../ak820-pro` with 2.24.6): title, artist, and thumbnail present, next/previous/toggle enabled, but no timeline at all (0 / 0 with a zero `LastUpdatedTime`), so no progress bar. |
 | Installed plugins | PilotsDeck (a self-contained .NET exe, 29 MB) is a local example of a non-Node plugin with a custom dial layout. |
+| Monitors | Samsung Odyssey G95NC (primary, DDC/CI range 0..50) and a Samsung SF10T (0..100), both answering DDC/CI over the NVIDIA outputs. |
+| Audio | Default output is the G95NC's audio over NVIDIA HD Audio. |
 
 Apple Music session observed with the diagnostic script:
 
@@ -807,24 +812,30 @@ Each milestone has an exit test. Do not start the next one until it passes.
    correction. YouTube in Chrome verified on the Stream Deck app's preview.
    Still to run: quitting and relaunching a player while `watch` runs, though
    the plugin log already shows sessions coming and going cleanly.
-2. **Plugin skeleton.** Code done; needs the device. The plugin is linked in
-   developer mode and its process launches and connects (Stream Deck log:
-   "Plugin connected"). Exit still open: drag "Now Playing" from the "Now
-   Playing" category onto the rightmost dial of page 1 and confirm the custom
-   layout renders. With nothing playing it should show a hidden icon,
-   `No media`, and no bar.
-3. **Wire display.** Code done (`FeedbackRenderer`, `MediaHub`,
-   `NowPlayingAction.OnTick`), unit tested. Exit still open: the section 6.2
-   states on the strip, progress advancing once a second, freezing on pause.
-4. **Wire input.** Code done. Exit still open: one toggle per press and per
-   tap, no toggle on release or on a long touch, one skip per detent, a fast
-   spin with no backlog, rotation while pressed ignored.
-5. **Recovery.** Code done for wake and device reconnect (full media refresh
-   and full re-push). Exit still open: the section 8 rows on the device.
-6. **Measure and package.** Not started. Section 11 measurements, then
-   `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true`
-   into the sdPlugin `bin/`, then `streamdeck pack`. Exit: installs from the
-   `.streamDeckPlugin` on a fresh profile and works.
+2. **Plugin skeleton.** Done. Linked in developer mode; the layout rendered
+   first on the app's preview (working remotely) and then on the device.
+3. **Wire display.** Done and verified on the hardware, which drove a day of
+   layout iteration: rows swapped so the title gets the full width, a 36 px
+   art tile, 14 px time labels, key text drawn into the image. The Now
+   Playing Key, Volume, SD Brightness, and Display Brightness actions were
+   added on the same day and verified the same way.
+4. **Wire input.** Done and verified: dial press and touch tap on the media
+   dial, press and hold on the key, rotate on every dial, and separate press,
+   tap, and hold gestures on the display dial including cycling between two
+   monitors and the deck.
+5. **Recovery.** Code in place for wake and device reconnect, and the media
+   service's session comings and goings are seen in the log; a deliberate
+   sleep/wake cycle and a USB unplug have not been run as a test yet.
+6. **Measure and package.** Not started. In order:
+   - a `.sdignore` in the sdPlugin folder excluding `bin/*.pdb`, `pluginlog.log`,
+     and `logs/`; the trimmed publish leaves an 84 MB `libSkiaSharp.pdb`
+   - `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true`
+     into a copy of the sdPlugin folder, then `streamdeck pack`, then confirm
+     the trimmed build actually runs (untrimmed is the fallback)
+   - install the `.streamDeckPlugin` on a fresh profile and repeat the
+     section 11 checks; run the resource measurements
+   - a LICENSE file for the public repo, a real plugin icon, listing copy and
+     screenshots, and the name decision (section 13)
 
 When a check fails, `bin/pluginlog.log` in the sdPlugin folder has the
 plugin's own log (media events are tagged `[media]`, action events
@@ -872,13 +883,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
 
 1. foobar2000 progress: accept no bar (v1 default), or add per-app position
    reads through its `foo_beefweb` HTTP API later?
-2. Later candidates, not planned: separate press, tap, and hold gestures on
+2. HDR: whether the Display Brightness dial keeps working on the G95NC with
+   Windows HDR on. Many monitors lock brightness in HDR mode; untested here.
+3. License for the public repository: none chosen yet.
+4. Later candidates, not planned: separate press, tap, and hold gestures on
    the media dial (the events allow it; left and right tap zones for previous
    and next were considered and set aside as too cryptic without a visual
    hint), tapping the progress bar to seek on players that allow it,
    press-and-rotate, a luminance-aware glyph colour on the art, a proper
    plugin icon and Marketplace listing assets (section 13).
-3. Pressing with no session: today the command is rejected and the action
+5. Pressing with no session: today the command is rejected and the action
    shows the alert triangle, because the media API can only control sessions
    that exist. Left as is on 2026-09-06 pending real use. If it becomes a
    problem, the design is a "when nothing is playing, open …" setting with a
