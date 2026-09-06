@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NowPlaying.Media.Cli/NowPlaying.Media.Cli.csproj" />
+    <Project Path="src/NowPlaying.Media/NowPlaying.Media.csproj" />
+    <Project Path="src/NowPlaying.Plugin/NowPlaying.Plugin.csproj" />
+  </Folder>
+</Solution>

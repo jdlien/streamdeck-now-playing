@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Stream Deck plugin host (README section 3, decision 2): one process,
+    StreamDeck-Tools for the WebSocket protocol, the media library for the
+    rest.
+
+    WinExe, not Exe: the Stream Deck app launches this process and a console
+    subsystem would put a window on screen. Logging goes to the plugin log.
+
+    Build output goes straight into the .sdPlugin folder so that
+    `streamdeck link` on that folder plus `streamdeck restart` after each build
+    is the whole dev loop. The manifest's CodePathWin points at bin/NowPlaying.exe.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Plugin</RootNamespace>
+    <AssemblyName>NowPlaying</AssemblyName>
+    <OutDir>$(MSBuildProjectDirectory)/com.jdlien.now-playing.sdPlugin/bin/</OutDir>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StreamDeck-Tools" Version="7.0.0" />
+    <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
+  </ItemGroup>
+
+</Project>

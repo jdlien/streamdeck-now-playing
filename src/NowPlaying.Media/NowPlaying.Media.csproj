@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows media session wrapper. No Stream Deck dependency: this is the
+    reusable piece (README section 3, decision 3).
+
+    The Windows-versioned target framework pulls in the WinRT projection for
+    Windows.Media.Control. SupportedOSPlatformVersion is 1809 (build 17763),
+    the first Windows with GlobalSystemMediaTransportControlsSessionManager.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Media</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

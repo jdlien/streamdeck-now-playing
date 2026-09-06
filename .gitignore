@@ -1,0 +1,17 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+# Plugin build output lands inside the sdPlugin folder (see NowPlaying.Plugin.csproj)
+src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/bin/
+src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/logs/
+src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/*.log
+# Packaged plugin
+*.streamDeckPlugin
+# Node (Elgato CLI leftovers, if any)
+node_modules/
+# OS
+Thumbs.db
+.DS_Store

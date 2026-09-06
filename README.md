@@ -1,0 +1,556 @@
+# Stream Deck Now Playing
+
+Design and implementation plan for a Windows plugin for the Elgato Stream Deck +.
+It shows the current Windows media session (title, artist, play state, progress)
+on one dial's touch-strip segment and controls playback with that dial.
+
+Status: repository scaffolded 2026-09-06 with a building solution, a working
+`probe` command in the console harness, and a plugin skeleton that passes
+`streamdeck validate`. Milestone 1 (the media service) is next. Facts below
+were verified on this machine on 2026-09-06.
+
+## 1. Requested behavior
+
+Use one dial and its touch-strip segment. Initial placement: the rightmost dial
+on the first page.
+
+Display:
+- A small play or pause icon in the top-left corner, reflecting playback state.
+- Song title on the top line, to the right of the icon.
+- Artist on the line below.
+- A playback progress bar underneath the text.
+
+| Input | Action |
+| --- | --- |
+| Turn right | Next track |
+| Turn left | Previous track |
+| Press the dial | Toggle play/pause |
+| Tap the touch strip above the dial | Toggle play/pause |
+
+The same media session is used for the displayed information and all commands.
+
+## 2. Verified environment
+
+| Item | Finding |
+| --- | --- |
+| Windows | 11, build 26200 |
+| Stream Deck app | 7.5.1, installed at `C:\Program Files\Elgato\StreamDeck` |
+| Device | Stream Deck + connected (USB 0fd9:0084), firmware 2.0.3.7. The app log shows several USB disconnect/reconnect cycles, so reconnection handling is a real requirement. |
+| Toolchains | .NET 10 SDK (plus 9), Node 24, Rust 1.97, Python 3.12, PowerShell 7 |
+| Node for plugins | Provided by the Stream Deck app itself. The manifest declares Node 20 or 24 and the app manages runtimes under `%APPDATA%\Elgato\StreamDeck\NodeJS`. Not used by this plugin. |
+| Windows media API | Works from an unpackaged process. `tools/Check-MediaSessions.ps1` enumerated the live session. |
+| Apple Music (Store) | Registers a session. App id `AppleInc.AppleMusicWin_nzyj5cx40ttqa!App`. Primary test player. |
+| foobar2000 2.25.10 | Registers a session natively as `foobar2000.exe`; v2 gained this, no plug-in needed. Measured here on 2026-09-06 (and in `../ak820-pro` with 2.24.6): title, artist, and thumbnail present, next/previous/toggle enabled, but no timeline at all (0 / 0 with a zero `LastUpdatedTime`), so no progress bar. |
+| Installed plugins | PilotsDeck (a self-contained .NET exe, 29 MB) is a local example of a non-Node plugin with a custom dial layout. |
+
+Apple Music session observed with the diagnostic script:
+
+- While playing: status `Playing`, type `Music`, rate 1. Shuffle and repeat are
+  not reported.
+- Title and Artist populated. Artist contained `Michael Oakley — Prologue` (an
+  em dash, U+2014; the console rendered it as a hyphen) while AlbumTitle was
+  empty and AlbumArtist repeated the Artist value. The suffix is the album
+  name: a second track from the same album, `Memory of You` by
+  `Michael Oakley & Missing Words — Prologue`, carried the same suffix. So
+  Apple Music packs `Artist — Album` into Artist. TrackNumber was 0.
+- At launch, before anything is loaded, Apple Music registers a session in the
+  `Opened` state and Windows reports it as the current session. Measured in
+  `../ak820-pro`; it is why session choice must rank rather than follow
+  "current" (see 5.3).
+- Thumbnail reference present (album art is available if wanted later).
+- Controls: next, previous, and toggle enabled. Seek not enabled.
+- Timeline while playing: Position in whole seconds, duration 3:55.
+  `LastUpdatedTime` advanced on every sample taken 3 s apart, so Apple Music
+  refreshes the timeline at least every few seconds and probably every second.
+- Timeline while paused: Position and `LastUpdatedTime` both froze at the
+  moment of the pause. Other players are less generous while playing; see 5.4.
+
+foobar2000 2.25.10 session observed while playing, with Apple Music still open
+and paused:
+
+- Status `Playing`, type `Music`. PlaybackRate, shuffle, and repeat are not
+  reported.
+- Title and Artist populated (`Remember (ESCM 12' Mix)` by `BT`), AlbumTitle
+  empty, thumbnail present.
+- Controls: next, previous, and toggle enabled. Seek not enabled.
+- Timeline: Position, StartTime, and EndTime all zero, and `LastUpdatedTime`
+  is zero ticks, which displays as 1601-01-01 UTC. This is the "never updated"
+  case in 5.4, seen live.
+- Windows named foobar2000 the current session, and the ranking rule in 5.3
+  picks it too: `Playing` beats Apple Music's `Paused`.
+- After its Stop button: status `Stopped`, with title, artist, thumbnail, and
+  all three control flags still reported. A stopped foobar2000 still has a
+  track loaded, which is why 5.3 keeps `Stopped` as a low-rank candidate.
+
+## 3. Decisions
+
+1. **Language and runtime: C# on .NET 10, Windows-targeted.** The media API is
+   a WinRT API. C# has first-class projections with real events and async.
+   Node has no usable WinRT binding, so a Node plugin would need a C# helper
+   process anyway. Target framework `net10.0-windows10.0.19041.0`; the Windows
+   SDK projection is included automatically for Windows-versioned targets.
+2. **One process: the plugin shell is also C#, using StreamDeck-Tools 7.0.**
+   Version 7.0.0 (April 2026) ships a `net10.0` target and exposes
+   `EncoderBase` with `DialRotate`, `DialDown`, `DialUp`, `TouchPress`,
+   `SetFeedbackAsync`, and `SetFeedbackLayoutAsync`. One process means no IPC,
+   no child-process supervision, one log, one debugger.
+   - Fallback: the Stream Deck WebSocket protocol is small (register, a handful
+     of events, `setFeedback`). If StreamDeck-Tools' dependencies (Newtonsoft,
+     NLog, SkiaSharp, System.Drawing.Common) fight trimming or add too much size,
+     replace it with a ~200-line hand-rolled client on `System.Net.WebSockets`
+     and `System.Text.Json`.
+   - Rejected: official Node SDK plugin plus a C# helper over stdio. Two
+     processes for one action is not worth Elgato's templates.
+3. **Reusable media component.** `NowPlaying.Media` is a class library with no
+   Stream Deck dependency. `NowPlaying.Media.Cli` is a thin console host that
+   prints session events as JSON. It is the test harness for milestone 1 and
+   the reusable piece for future utilities.
+4. **Icon convention: state, as requested.** Play icon while playing, pause icon
+   while paused. The strip is a display, not a labelled button, and the dial is
+   the control. Swapping to the action convention is a one-line change.
+5. **Minimum versions.** Stream Deck 7.1 (`Software.MinimumVersion`), Windows 10
+   1809 or later (the media session API arrived in build 17763). End users do
+   not need .NET installed because the publish is self-contained.
+6. **Identity.** Plugin UUID `com.jdlien.now-playing`, action UUID
+   `com.jdlien.now-playing.dial`. Lowercase letters, digits, hyphens, and periods
+   only.
+7. **Packaging.** `dotnet publish -c Release -r win-x64 --self-contained
+   -p:PublishSingleFile=true`, with `-p:PublishTrimmed=true` if the dependencies
+   allow it. Expect 15 to 30 MB trimmed, up to about 70 MB untrimmed. Package
+   with `streamdeck pack` into a `.streamDeckPlugin`.
+
+## 4. Architecture
+
+```
+NowPlaying.slnx
+  src/NowPlaying.Media/          class library: Windows media session wrapper
+  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe now, watch in milestone 1
+  src/NowPlaying.Plugin/         Stream Deck plugin (StreamDeck-Tools); builds into the sdPlugin folder
+    com.jdlien.now-playing.sdPlugin/
+      manifest.json
+      layouts/now-playing.json
+      imgs/icons/                play.svg, pause.svg for the layout's pixmap item
+      imgs/plugin/, imgs/actions/  placeholder PNG icons for the Stream Deck app
+      bin/                       build output, git-ignored; manifest CodePath is bin/NowPlaying.exe
+  tools/Check-MediaSessions.ps1  zero-build diagnostic (Windows PowerShell 5.1)
+```
+
+### 4.1 Developer loop
+
+```
+dotnet build NowPlaying.slnx
+dotnet run --project src/NowPlaying.Media.Cli -- probe          # add --json for machine output
+streamdeck validate src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin
+streamdeck link src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin   # once
+streamdeck restart com.jdlien.now-playing                        # after each build
+```
+
+The plugin project builds straight into the `.sdPlugin/bin/` folder, so link
+once and restart after each build. StreamDeck-Tools writes `pluginlog.log`
+next to the exe; the Stream Deck app's own logs are in
+`%APPDATA%\Elgato\StreamDeck\logs`.
+
+Runtime components inside the plugin process:
+
+- **MediaSessionService** (singleton). Owns the session manager, chooses the
+  active session, subscribes to its events, and publishes an immutable
+  `NowPlayingSnapshot` whenever something changes. Exposes `NextAsync`,
+  `PreviousAsync`, `TogglePlayPauseAsync`.
+- **NowPlayingAction** (one instance per action context). Registered with
+  `[PluginActionId("com.jdlien.now-playing.dial")]`. Subscribes to the service
+  on `willAppear`, unsubscribes on `willDisappear`, translates dial and touch
+  events into service calls, and pushes feedback for its context.
+- **FeedbackRenderer**. Pure function from snapshot plus wall clock to the
+  `setFeedback` payload. Diffs against the last payload so unchanged fields are
+  not resent (every send pushes pixels over USB).
+- **ProgressTicker**. A single timer at 1 Hz that runs only while the snapshot
+  is `Playing`, has a usable duration, and at least one action is visible.
+
+Data flow: media events, then the service queue, then a snapshot, then each
+visible action, then the renderer, then `setFeedback`. Dial input goes from the
+action to a service command to the player. The plugin never assumes its own
+command succeeded; the display changes only when the media session reports the
+new state.
+
+## 5. Media component design
+
+### 5.1 API surface
+
+`Windows.Media.Control` namespace:
+
+- `GlobalSystemMediaTransportControlsSessionManager.RequestAsync()`,
+  `GetCurrentSession()`, `GetSessions()`, events `CurrentSessionChanged`,
+  `SessionsChanged`.
+- Per session: `SourceAppUserModelId`, `TryGetMediaPropertiesAsync()`,
+  `GetPlaybackInfo()`, `GetTimelineProperties()`, events
+  `MediaPropertiesChanged`, `PlaybackInfoChanged`, `TimelinePropertiesChanged`.
+- Commands: `TrySkipNextAsync()`, `TrySkipPreviousAsync()`,
+  `TryTogglePlayPauseAsync()`. Each returns a bool that only means the request
+  was accepted.
+- `PlaybackInfo.Controls` flags (`IsNextEnabled`, `IsPreviousEnabled`,
+  `IsPlayPauseToggleEnabled`) say whether a command is currently meaningful.
+
+### 5.2 Snapshot model
+
+```csharp
+record NowPlayingSnapshot(
+    string? AppId,                  // SourceAppUserModelId, null when no session
+    PlaybackState State,            // None, Playing, Paused, Stopped, Changing
+    string Title, string Artist,    // already normalised, may be empty
+    TimeSpan? Position,             // as reported by the player
+    DateTimeOffset? PositionAt,     // LastUpdatedTime for that position
+    TimeSpan? Duration,             // null when unknown or not usable
+    bool CanNext, bool CanPrevious, bool CanToggle);
+```
+
+Artist normalisation: Artist, else AlbumArtist, else AlbumTitle, else empty.
+Title: Title, else empty. Missing title and artist together with a live session
+shows the app name derived from the app id.
+
+### 5.3 Session selection
+
+Rank every session instead of trusting `GetCurrentSession()`. This is the rule
+the `../ak820-pro` agent settled on after a real regression: Windows reported
+Apple Music, merely open with nothing loaded, as the current session while
+foobar2000 held a paused track, and following "current" showed an empty display.
+
+1. Candidates are sessions whose status is `Playing` or `Paused`, plus
+   `Stopped` sessions that still carry a title (foobar2000's Stop button
+   leaves the track loaded and reported). `Closed`, `Opened`, and `Changing`
+   are not candidates, and neither is a session whose status cannot be read.
+2. `Playing` beats `Paused`, which beats `Stopped`.
+3. Within the same status, the session that is also the manager's current
+   session wins. This keeps a deliberate foreground choice honoured.
+4. Remaining ties keep the manager's own order: the first candidate wins.
+5. A preferred app id setting (property inspector, later) takes precedence when
+   a session with that id is a candidate.
+6. Exception for track transitions: the currently chosen session keeps its
+   rank while in `Changing` for up to 2 s, so a track change does not flash
+   `No media`.
+
+Ranking reads only status and app id, which are cheap synchronous calls.
+Metadata is read for the winner alone (see 5.5). Subscribe
+`PlaybackInfoChanged` on every session so a status change anywhere triggers a
+re-rank; subscribe `MediaPropertiesChanged` and `TimelinePropertiesChanged` on
+the winner only. Re-rank also on `CurrentSessionChanged` and `SessionsChanged`.
+
+Switching sessions means unsubscribing the old session's events and subscribing
+the new one. Leaked subscriptions are the likely cause of memory growth, so this
+is a test item.
+
+### 5.4 Progress and timeline
+
+The timeline is not a clock. `GetTimelineProperties()` returns `Position` and
+`LastUpdatedTime`, and each player decides how often to refresh them. Apple
+Music refreshes roughly every second. Spotify and some browsers refresh only on
+seek, track change, or state change. So:
+
+- Position and duration are relative to `StartTime`: position =
+  `Position - StartTime`, duration = `EndTime - StartTime`.
+- Displayed position while `Playing` = position + age, where age =
+  `now - LastUpdatedTime`, clamped to `[0, duration]`. Trust the age only when
+  `0 <= age < 600 s`: a negative age means the clocks disagree, a huge one
+  means the timestamp is meaningless. A `LastUpdatedTime` of zero ticks means
+  "never updated" (it reads as the year 1601), not "just now". foobar2000
+  reports exactly that, so this case is routine rather than theoretical.
+- Do the arithmetic on `TimeSpan` and `DateTimeOffset` values, never on seconds
+  converted to `double` first. The `../ak820-pro` audit found a 245-second
+  track computing as 244.99999999999997 and truncating to 244 that way. .NET
+  `TimeSpan` ticks are the same 100 ns unit as WinRT, so subtracting the
+  structs is exact.
+- Displayed position while `Paused` = `Position`. The bar freezes. Apple Music
+  confirms this model: on pause its `LastUpdatedTime` stops advancing.
+- Every `TimelinePropertiesChanged` event replaces the base values, which
+  corrects drift and handles seeks and track changes.
+- The 1 Hz ticker only redraws. It never calls into the media API.
+- Duration is usable only when `EndTime > StartTime` and the length is under
+  24 hours. Otherwise `Duration` is null and the bar is hidden. This covers
+  live streams and players that report garbage end times.
+- Bar value = position / duration mapped onto the layout range 0..1000.
+
+### 5.5 Event handling
+
+- `MediaPropertiesChanged` fires several times per track change as fields and
+  the thumbnail arrive. Coalesce with a 150 ms debounce, then read properties
+  once and publish a snapshot only if it differs from the last one.
+- `TryGetMediaPropertiesAsync` can throw or return stale data right after a
+  track change. Retry once after 250 ms, then keep the previous metadata.
+- Read metadata for the chosen session only, never for every session. The
+  `../ak820-pro` audit found that reading properties of an unrelated stopped
+  app can stall the whole read while the display keeps a stale position.
+- Never poll `TryGetMediaPropertiesAsync` on a timer. The ak820 agents poll at
+  3 s because 1 s polling was measured to make Spotify sluggish; this plugin
+  reads it only on change events, which is cheaper still.
+- Bound every awaited media call with `Task.WaitAsync(TimeSpan)`; 2 s is
+  generous. A wedged media broker must produce a logged timeout and a stale
+  snapshot, not a hung service. The ak820 Rust worker could not bound its
+  waits and isolated them on a thread instead; .NET can bound them.
+- Enumerate `GetSessions()` by index and skip entries that fail. The list can
+  change underneath the loop when an app closes, and one unreadable session
+  must not blind the service to the others.
+- On any read failure keep the previous snapshot and record the failure and
+  its time. A broker that blinks should not blank the strip.
+- `PlaybackStatus` has six values: Closed, Opened, Changing, Stopped, Playing,
+  Paused. `Changing` is transient; keep the last state. `Closed` is treated as
+  no session.
+- All WinRT events arrive on thread-pool threads. The service funnels them into
+  one `Channel<T>` consumed by a single loop, so snapshot publication is
+  serialised and no locks are needed.
+
+### 5.6 Commands
+
+- Send exactly one command per user gesture. Check the `Controls` flag first
+  and drop the gesture if the command is disabled.
+- Commands are awaited only to log the accepted/rejected result. The display
+  waits for the session to report the change.
+- Previous-track semantics belong to the player. Apple Music and most players
+  restart the current track first when a few seconds have elapsed.
+- Seeking is out of scope. Apple Music reports seek as not enabled anyway.
+
+### 5.7 Player quirks (known so far)
+
+| Player | Behaviour |
+| --- | --- |
+| Apple Music | Artist field is `Artist — Album` (em dash) with AlbumTitle empty. Display verbatim in v1; if it needs to be shorter, prefer the part before the em dash. Registers an `Opened` session at launch that Windows calls current. Timeline refreshes about every second while playing and freezes on pause. |
+| foobar2000 | v2 registers a session with stock components; no plug-in needed. Title, artist, and thumbnail are correct; AlbumTitle is empty. Timeline is all zeros with a zero `LastUpdatedTime` even while playing, so the bar stays hidden. The control flags report next, previous, and toggle as enabled, so commands should work; confirm in milestone 1. The only known route to a position is its `foo_beefweb` HTTP API, which would be per-app code and is out of scope. |
+| Edge / Chrome | Registers one session per playing tab. Title comes from the page's Media Session API; Artist is often empty or the site name. Position depends on whether the site calls `setPositionState`; YouTube does. |
+
+### 5.8 Borrowed from the ak820-pro keyboard agent
+
+`../ak820-pro` solved the read side of this problem for a keyboard LCD, first
+in Python (`hostagent/nowplaying-windows.py`, on the `winsdk` package) and then
+in Rust (`ak820-agent/src/smtc/mod.rs` holds the pure ranking and timeline
+logic with its tests; `worker.rs` holds the WinRT calls). Reused here:
+
+- The session ranking rule in 5.3 and its regression case.
+- The timeline arithmetic in 5.4: start-relative values, tick subtraction, the
+  0 to 600 s age gate, zero `LastUpdatedTime` treated as absent.
+- The cheap-pass then expensive-pass read order and the by-index enumeration
+  in 5.5.
+- The measured facts: foobar2000 v2 registers natively without a timeline,
+  Apple Music is `Opened` and current at launch, the em dash in Apple Music's
+  artist field, and 1 s polling making Spotify sluggish.
+- `ak820 probe` is the same idea as `tools/Check-MediaSessions.ps1`.
+
+Not carried over: the 3 s polling loop (this plugin is event-driven with a
+redraw-only ticker), the 30 s keepalive (the Stream Deck app retains feedback,
+so a full re-push on `willAppear` is the equivalent), and ASCII folding (the
+strip renders Unicode). One deliberate difference: `Stopped` sessions with a
+title are low-rank candidates here rather than excluded, because foobar2000's
+Stop button leaves a loaded track that a dial press will resume. The Rust `smtc` module is a working, tested
+implementation; if one shared component across both projects ever matters more
+than staying in C#, it is the one to lift.
+
+## 6. Display design
+
+### 6.1 Layout
+
+Custom layout on the 200 x 100 canvas. Item keys deliberately avoid the reserved
+key `title`, which would hand font, colour, and alignment control to the
+property inspector.
+
+```json
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
+  "id": "com.jdlien.now-playing.layout",
+  "items": [
+    { "key": "icon",     "type": "pixmap", "rect": [8, 8, 24, 24], "zOrder": 1 },
+    { "key": "track",    "type": "text",   "rect": [38, 4, 158, 30], "zOrder": 1,
+      "alignment": "left", "font": { "size": 18, "weight": 600 },
+      "text-overflow": "ellipsis", "color": "white" },
+    { "key": "artist",   "type": "text",   "rect": [38, 36, 158, 26], "zOrder": 1,
+      "alignment": "left", "font": { "size": 14, "weight": 400 },
+      "text-overflow": "ellipsis", "color": "lightGray" },
+    { "key": "progress", "type": "bar",    "rect": [8, 76, 184, 14], "zOrder": 1,
+      "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
+      "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 }
+  ]
+}
+```
+
+Notes from the layout schema:
+- `text-overflow` accepts `clip`, `ellipsis`, `fade`; `ellipsis` is the default.
+  `fade` is worth a look once real titles are on the strip.
+- `font.weight` is 100..1000. `zOrder` is 0..700 and items sharing a zOrder
+  must not overlap.
+- `bar.subtype`: 0 rectangle, 1 double rectangle, 2 trapezoid, 3 double
+  trapezoid, 4 groove (default).
+- `pixmap.value` accepts a file path relative to the plugin folder, a base64
+  string, or an SVG string. The play and pause icons ship as SVG files.
+- Two lines of text is the practical limit at legible sizes. Elapsed and total
+  time labels do not fit alongside the bar without shrinking the text; they
+  stay out of v1.
+
+### 6.2 States
+
+| Condition | Icon | Track | Artist | Bar |
+| --- | --- | --- | --- | --- |
+| No session or Closed | hidden | `No media` | empty | hidden (`enabled: false`) |
+| Playing, duration known | play | title | artist | visible, advancing |
+| Playing, no duration | play | title | artist | hidden |
+| Paused or Stopped, metadata known | pause | title | artist | frozen at last position |
+| Changing | previous | previous | previous | previous |
+| Session present, no title or artist | as state | app name | empty | as above |
+
+### 6.3 Update policy
+
+- Push a full payload on `willAppear` and after any recovery event.
+- Otherwise push only changed keys. Metadata and state changes are pushed as
+  they arrive (after the debounce). Progress is pushed at 1 Hz while playing.
+  On a 184 px bar and a 4-minute track that is roughly one pixel every 1.3 s,
+  so 1 Hz is already smoother than the display can show.
+- Nothing is pushed while no action instance is visible.
+
+## 7. Input handling
+
+| Event | Payload fields used | Behaviour |
+| --- | --- | --- |
+| `dialRotate` | `ticks` (sign), `pressed` | One skip per event in the sign direction, regardless of magnitude. Minimum 200 ms between skips; extra events inside that window are dropped, never queued. Rotation while pressed is ignored in v1 (reserved for seek). |
+| `dialDown` | none | Toggle play/pause once. |
+| `dialUp` | none | Ignored, so a press never toggles twice. |
+| `touchTap` | `hold` | `hold: false` toggles play/pause once. `hold: true` is a distinct gesture and is ignored in v1. |
+
+`ticks` can exceed 1 per event on a fast spin, which is why the policy counts
+events, not ticks. One detent still equals one track at normal speed.
+
+Multiple instances: the user may place the action on several dials or pages.
+Every instance shares the single MediaSessionService and each visible instance
+receives the same snapshot. Input from any instance drives the same session.
+
+## 8. Recovery
+
+| Trigger | Signal | Action |
+| --- | --- | --- |
+| Player quits or restarts | `SessionsChanged`, `CurrentSessionChanged` | Unsubscribe old session, re-select, publish new snapshot (possibly `No media`). |
+| Stream Deck app restarts | Plugin process is restarted | Clean startup; nothing special. |
+| USB disconnect and reconnect | `deviceDidDisconnect`, `deviceDidConnect`, then `willAppear` per instance | Re-push the full payload on `willAppear`. |
+| Sleep and wake | `systemDidWakeUp` | Re-request the session manager, re-subscribe, re-push. |
+| Silent event loss | Watchdog: `Playing` but `LastUpdatedTime` unchanged for 60 s | Re-read the session directly; if it is gone, re-request the manager. |
+| Stream Deck app exits | WebSocket closes | Dispose the service (unsubscribe, stop ticker) and exit the process. No orphaned exe. |
+
+## 9. Manifest sketch
+
+```json
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.jdlien.now-playing",
+  "Name": "Now Playing",
+  "Version": "0.1.0.0",
+  "Author": "JD Lien",
+  "Description": "Shows the current Windows media session on a Stream Deck + dial and controls playback.",
+  "Icon": "imgs/plugin/marketplace",
+  "Category": "Now Playing",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/NowPlaying.exe",
+  "SDKVersion": 2,
+  "Software": { "MinimumVersion": "7.1" },
+  "OS": [ { "Platform": "windows", "MinimumVersion": "10" } ],
+  "Actions": [
+    {
+      "UUID": "com.jdlien.now-playing.dial",
+      "Name": "Now Playing",
+      "Icon": "imgs/actions/now-playing/icon",
+      "Controllers": [ "Encoder" ],
+      "Encoder": {
+        "layout": "layouts/now-playing.json",
+        "TriggerDescription": {
+          "Rotate": "Next / previous track",
+          "Push": "Play / pause",
+          "Touch": "Play / pause"
+        }
+      },
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false
+    }
+  ]
+}
+```
+
+The real file is `src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/manifest.json`;
+this sketch shows the shape. `streamdeck validate` requires `CodePath` even for
+a Windows-only plugin, so `CodePathWin` is not used. The Stream Deck app
+launches that exe with `-port`, `-pluginUUID`, `-registerEvent`, and `-info`
+arguments; StreamDeck-Tools consumes them in `SDWrapper.Run(args)`.
+
+## 10. Build plan
+
+Each milestone has an exit test. Do not start the next one until it passes.
+
+1. **Media library and console harness.** `NowPlaying.Media.Cli` prints a JSON
+   line for every snapshot change and accepts `next`, `prev`, `toggle` on
+   stdin. Exit: with Apple Music, track changes, external pause/resume, and
+   position extrapolation all show correctly; the same with a YouTube tab in
+   Edge; quitting and relaunching Apple Music recovers without restarting the
+   harness.
+2. **Plugin skeleton.** Manifest, layout, icons, StreamDeck-Tools host that
+   shows static text on the dial. Developer mode via `streamdeck dev`, folder
+   linked with `streamdeck link`, validated with `streamdeck validate`,
+   restarted with `streamdeck restart com.jdlien.now-playing`. Exit: the custom
+   layout renders on the rightmost dial with placeholder text and a half-full bar.
+3. **Wire display.** Service snapshots drive the renderer; state and metadata
+   update live; progress ticker on. Exit: section 6.2 states all reproduce.
+4. **Wire input.** Section 7 policies. Exit: single toggles per press and tap,
+   fast spin produces no backlog, disabled commands are dropped.
+5. **Recovery.** Section 8. Exit: each row's trigger recovers within a few
+   seconds without restarting anything.
+6. **Measure and package.** Section 11 measurements, then `dotnet publish` and
+   `streamdeck pack`. Exit: installs from the `.streamDeckPlugin` on a fresh
+   profile and works.
+
+## 11. Validation
+
+Functional (run against Apple Music first, then Edge with YouTube, then
+foobar2000, which needs no plug-in and should show text and icon with the bar
+hidden):
+
+- Title and artist update on track change, including tracks that share a title.
+- External play, pause, and stop from the player's own UI update the icon.
+- Next and previous from the dial; previous-restarts-track behaviour noted.
+- Exactly one toggle per dial press and per touch tap; long touch does nothing.
+- Long titles and artists truncate with ellipsis; CJK, accented, and emoji text
+  render; empty artist and empty title cases.
+- Live stream or missing duration hides the bar; seeking snaps the bar.
+- Two players: music playing while a browser tab opens, then starts playing,
+  then closes.
+- Fast dial spin in both directions: no skip backlog.
+- Recovery table in section 8, row by row, including a real sleep/wake cycle.
+- Placing the action on two dials at once.
+
+Resource measurements (Process Explorer or `Get-Process` sampled every minute
+for at least an hour):
+
+- CPU near 0% idle with no session, near 0% with a paused session, under 1%
+  while playing.
+- Private bytes flat over an hour of playback with track changes every minute.
+- Timer stops when the action leaves the screen; verify with CPU at 0%.
+- Plugin process exits within a few seconds of quitting the Stream Deck app.
+
+Diagnostic script: `tools/Check-MediaSessions.ps1` lists every session with
+metadata, control flags, and timeline samples. Run it in Windows PowerShell 5.1
+(`powershell.exe`), not PowerShell 7, because WinRT projection support is built
+into 5.1.
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps1 -Samples 3 -IntervalSeconds 3
+```
+
+## 12. Open questions
+
+1. Apple Music's `Artist — Album` field: show verbatim (v1 default) or split
+   at the em dash and drop the album?
+2. foobar2000 progress: accept no bar (v1 default), or add per-app position
+   reads through its `foo_beefweb` HTTP API later?
+3. Later candidates, not planned: album art in the icon slot (thumbnail is
+   already available), a preferred-player setting, long-touch or press-and-rotate
+   mapped to seek, elapsed/total labels.
+
+## References
+
+- [Elgato: Dials and Touch Strip guide](https://docs.elgato.com/streamdeck/sdk/guides/dials/)
+- [Elgato: layout JSON schema](https://schemas.elgato.com/streamdeck/plugins/layout.json)
+- [Elgato: manifest reference](https://docs.elgato.com/streamdeck/sdk/references/manifest/)
+- [Elgato: plugin WebSocket reference](https://docs.elgato.com/streamdeck/sdk/references/websocket/plugin/)
+- [Elgato: Stream Deck CLI](https://docs.elgato.com/streamdeck/cli/intro)
+- [StreamDeck-Tools on NuGet](https://www.nuget.org/packages/StreamDeck-Tools/) and [on GitHub](https://github.com/BarRaider/streamdeck-tools)
+- [Microsoft: GlobalSystemMediaTransportControlsSession](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession?view=winrt-26100)
+- Sibling project `../ak820-pro`: `ak820-agent/src/smtc/` (Rust ranking and timeline logic with tests), `hostagent/nowplaying-windows.py` (Python original), `docs/hardware.md` (player behaviour measured 2026-09-05)

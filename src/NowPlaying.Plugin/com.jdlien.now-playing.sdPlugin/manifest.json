@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.jdlien.now-playing",
+  "Name": "Now Playing",
+  "Version": "0.1.0.0",
+  "Author": "JD Lien",
+  "Description": "Shows the current Windows media session on a Stream Deck + dial and controls playback with it.",
+  "URL": "https://github.com/jdlien/streamdeck-now-playing",
+  "Icon": "imgs/plugin/marketplace",
+  "Category": "Now Playing",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/NowPlaying.exe",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.jdlien.now-playing.dial",
+      "Name": "Now Playing",
+      "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause.",
+      "Icon": "imgs/actions/now-playing/icon",
+      "Controllers": [ "Encoder" ],
+      "Encoder": {
+        "layout": "layouts/now-playing.json",
+        "TriggerDescription": {
+          "Rotate": "Next / previous track",
+          "Push": "Play / pause",
+          "Touch": "Play / pause"
+        }
+      },
+      "States": [
+        {
+          "Image": "imgs/actions/now-playing/key"
+        }
+      ],
+      "SupportedInMultiActions": false,
+      "UserTitleEnabled": false
+    }
+  ]
+}
