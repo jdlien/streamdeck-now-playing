@@ -53,8 +53,9 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   changes made anywhere else, such as the keyboard or the tray.
 - **Brightness**, a fourth action for a dial, again in the same layout: a sun
   tile, the deck model on the top row, "Brightness 60%" on the full-width
-  row, the bar as the level. Turn to adjust (step configurable, 5% default),
-  press or tap to switch the screen off and back on at the remembered level.
+  row, the bar as the level. Turn to adjust (step configurable, 2% default),
+  press or tap to dim the screen to a 1% glow and back to the remembered
+  level; a glow rather than black so the deck never looks dead.
   Talks to the hardware directly, because the plugin protocol has no
   brightness command (see 5.10).
 
@@ -465,8 +466,10 @@ What the hardware cannot do, and how the plugin copes:
   back, and the plugin cannot see that. It re-applies its level on wake and on
   device reconnect, which covers the common cases; a mismatch after the app's
   own slider corrects itself on the next dial turn.
-- **Adjusting while off turns it back on** at the new level, as the volume dial
-  unmutes. Toggling on from a level of 0 restores to 40% rather than to black.
+- **The toggle dims to 1%, not 0.** Chosen after the first hardware session:
+  a glow keeps the deck readable, black looks like a fault. Adjusting while
+  dimmed turns it back on at the new level, as the volume dial unmutes.
+  Un-dimming from a level no brighter than the glow restores to 40%.
 
 Marketplace note: the guidelines say nothing about plugins reaching the
 hardware directly. It is a review risk to flag in the submission notes, and a
@@ -618,8 +621,8 @@ Brightness dial:
 
 | Event | Behaviour |
 | --- | --- |
-| `dialRotate` | Level moves by `ticks` times the step (default 5%), applied to the hardware at once and saved to global settings. Adjusting while off turns the screen back on. Rotation while pressed is ignored. |
-| `dialDown` | Toggle the screen off (0%) or back to the remembered level. `dialUp` ignored. |
+| `dialRotate` | Level moves by `ticks` times the step (default 2%; the dial moves fast), applied to the hardware at once and saved to global settings. Adjusting while dimmed turns the screen back on. Rotation while pressed is ignored. |
+| `dialDown` | Toggle between a 1% glow and the remembered level. `dialUp` ignored. |
 | `touchTap` | Short tap toggles; a hold is ignored. |
 
 Key action:

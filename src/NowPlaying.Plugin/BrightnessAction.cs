@@ -7,7 +7,7 @@ namespace NowPlaying.Plugin;
 
 /// <summary>
 /// The brightness dial, in the shared layout: turn to set the Stream Deck's
-/// screen brightness, press or tap to toggle it to 0 and back. The device
+/// screen brightness, press or tap to dim it to a glow and back. The device
 /// cannot report its brightness, so the level shown is the one this plugin
 /// last set, persisted in global settings and re-applied after wake and
 /// reconnect.
@@ -24,7 +24,7 @@ public sealed class BrightnessAction : EncoderBase
     private readonly string _deviceName;
     private readonly Dictionary<bool, string> _tileCache = new();
     private FeedbackFrame? _lastFrame;
-    private int _stepPercent = 5;
+    private int _stepPercent = 2;
 
     public BrightnessAction(SDConnection connection, InitialPayload payload)
         : base(connection, payload)
@@ -130,7 +130,7 @@ public sealed class BrightnessAction : EncoderBase
         Dictionary<string, object> payload;
         lock (_gate)
         {
-            var frame = BrightnessRenderer.Render(state, _deviceName, TileFor(state.Off));
+            var frame = BrightnessRenderer.Render(state, _deviceName, TileFor(state.Dimmed));
             payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
         }
@@ -144,12 +144,12 @@ public sealed class BrightnessAction : EncoderBase
     }
 
     /// <summary>The two sun tiles, rendered once each. Call under the gate.</summary>
-    private string TileFor(bool off)
+    private string TileFor(bool dimmed)
     {
-        if (!_tileCache.TryGetValue(off, out var dataUri))
+        if (!_tileCache.TryGetValue(dimmed, out var dataUri))
         {
-            dataUri = ArtRenderer.ToDataUri(ArtRenderer.RenderBrightnessTile(off));
-            _tileCache[off] = dataUri;
+            dataUri = ArtRenderer.ToDataUri(ArtRenderer.RenderBrightnessTile(dimmed));
+            _tileCache[dimmed] = dataUri;
         }
 
         return dataUri;
@@ -177,7 +177,7 @@ public sealed class BrightnessAction : EncoderBase
     {
         lock (_gate)
         {
-            _stepPercent = int.Parse(SettingsReader.GetString(settings, StepKey, "5", Steps));
+            _stepPercent = int.Parse(SettingsReader.GetString(settings, StepKey, "2", Steps));
         }
 
         if (writeBackDefaults && SettingsReader.IsMissingAny(settings, StepKey))

@@ -11,7 +11,7 @@ public static class BrightnessRenderer
 {
     public static FeedbackFrame Render(BrightnessState state, string deviceName, string iconValue) => new(
         iconValue,
-        state.Off ? $"Off  {state.Level}%" : $"Brightness  {state.Level}%",
+        state.Dimmed ? $"Dimmed  {state.Level}%" : $"Brightness  {state.Level}%",
         deviceName,
         true,
         state.Effective * FeedbackRenderer.BarRange / 100,

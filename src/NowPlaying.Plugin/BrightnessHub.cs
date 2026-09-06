@@ -6,7 +6,7 @@ namespace NowPlaying.Plugin;
 /// <summary>
 /// The single brightness service shared by every brightness action. The
 /// level lives in global settings so it survives restarts and is the same
-/// on every page; the "off" toggle is per process.
+/// on every page; the "dimmed" toggle is per process.
 /// </summary>
 internal static class BrightnessHub
 {
@@ -33,7 +33,7 @@ internal static class BrightnessHub
                 message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {message}"));
             service.Changed += (state, applied) =>
             {
-                Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {state.Effective}% ({(state.Off ? "off" : "on")}, level {state.Level}) -> {applied} device(s)");
+                Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {state.Effective}% ({(state.Dimmed ? "dimmed" : "on")}, level {state.Level}) -> {applied} device(s)");
                 Changed?.Invoke(state);
             };
             _service = service;

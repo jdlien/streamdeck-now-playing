@@ -85,7 +85,7 @@
     {
       "UUID": "com.jdlien.now-playing.brightness",
       "Name": "Brightness",
-      "Tooltip": "Stream Deck screen brightness on the touch strip, in the same layout. Turn to adjust, press or tap to switch off and back.",
+      "Tooltip": "Stream Deck screen brightness on the touch strip, in the same layout. Turn to adjust, press or tap to dim and restore.",
       "Icon": "imgs/actions/brightness/icon",
       "Controllers": [ "Encoder" ],
       "PropertyInspectorPath": "pi/brightness.html",
@@ -93,8 +93,8 @@
         "layout": "layouts/brightness.json",
         "TriggerDescription": {
           "Rotate": "Brightness",
-          "Push": "Screen off / on",
-          "Touch": "Screen off / on"
+          "Push": "Dim / restore",
+          "Touch": "Dim / restore"
         }
       },
       "States": [

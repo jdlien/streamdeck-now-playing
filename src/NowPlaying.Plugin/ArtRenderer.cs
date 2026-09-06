@@ -118,8 +118,8 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
-    /// <summary>The brightness dial's tile: a sun with eight rays, dimmed when the screen is toggled off.</summary>
-    public static byte[] RenderBrightnessTile(bool off, int size = DialTileSize)
+    /// <summary>The brightness dial's tile: a sun with eight rays, greyed when the screen is dimmed.</summary>
+    public static byte[] RenderBrightnessTile(bool dimmed, int size = DialTileSize)
     {
         using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
         var canvas = surface.Canvas;
@@ -130,7 +130,7 @@ public static class ArtRenderer
         using var tile = new SKPaint { Color = new SKColor(0x2c, 0x2c, 0x32), IsAntialias = true };
         canvas.DrawRoundRect(rect, corner, corner, tile);
 
-        var color = off ? DimGlyph : SKColors.White;
+        var color = dimmed ? DimGlyph : SKColors.White;
         var cx = size / 2f;
         var cy = size / 2f;
         var half = size * 0.31f;
