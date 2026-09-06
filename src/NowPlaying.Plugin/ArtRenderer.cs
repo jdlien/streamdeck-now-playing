@@ -13,7 +13,7 @@ public static class ArtRenderer
     private static readonly SKColor Background = new(0x1e, 0x1e, 0x22);
     private static readonly SKColor DimGlyph = new(0x70, 0x70, 0x78);
     private static readonly SKColor BadgeScrim = new(0, 0, 0, 150);
-    private static readonly SKColor TileScrim = new(0, 0, 0, 110);
+    private static readonly SKColor TileScrim = new(0, 0, 0, 120);
     private static readonly SKSamplingOptions Sampling = new(SKCubicResampler.Mitchell);
 
     /// <summary>
@@ -48,9 +48,9 @@ public static class ArtRenderer
     }
 
     /// <summary>
-    /// The dial's icon tile: the art under a light scrim with the glyph
-    /// centred on it. At 28 px on the strip a corner badge would be
-    /// unreadable, so the whole tile carries the state.
+    /// The dial's icon tile, drawn 1:1 at the layout's 56 px slot: the art
+    /// under a light scrim with the glyph centred on it. A corner badge would
+    /// be too small at this size, so the whole tile carries the state.
     /// </summary>
     public static byte[] RenderDialIcon(PlaybackState state, byte[]? art, int size = 56)
     {
@@ -68,7 +68,7 @@ public static class ArtRenderer
             canvas.DrawRoundRect(rect, corner, corner, scrim);
         }
 
-        DrawGlyph(canvas, state, size / 2f, size / 2f, size * 0.52f, SKColors.White);
+        DrawGlyph(canvas, state, size / 2f, size / 2f, size * 0.62f, SKColors.White);
         return Encode(surface);
     }
 

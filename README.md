@@ -19,9 +19,10 @@ on the first page.
 Display:
 - A small play or pause icon in the top-left corner, reflecting playback state.
 - Artist on the top line, to the right of the icon.
-- Song title on the line below, across the full width. (Originally the other
-  way round; swapped 2026-09-06 after the first look at the strip, because the
-  title is the line that needs the room and the icon shortens the top row.)
+- Song title on the line below. (Originally the other way round; swapped
+  2026-09-06 after the first look at the strip, because the title is the line
+  that needs the room. Later the same day the art tile grew to span both rows,
+  so both rows now start to its right.)
 - A playback progress bar underneath the text.
 - Elapsed time at the bottom left and track length at the bottom right, in
   small text. Added 2026-09-06 after the first look at the strip.
@@ -405,11 +406,11 @@ property inspector.
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
   "id": "com.jdlien.now-playing.layout",
   "items": [
-    { "key": "icon",     "type": "pixmap", "rect": [6, 5, 28, 28], "zOrder": 1 },
-    { "key": "artist",   "type": "text",   "rect": [38, 6, 158, 26], "zOrder": 1,
+    { "key": "icon",     "type": "pixmap", "rect": [4, 4, 56, 56], "zOrder": 1 },
+    { "key": "artist",   "type": "text",   "rect": [66, 6, 130, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
-    { "key": "track",    "type": "text",   "rect": [8, 34, 184, 28], "zOrder": 1,
+    { "key": "track",    "type": "text",   "rect": [66, 34, 130, 28], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 600 },
       "text-overflow": "ellipsis", "color": "white" },
     { "key": "progress", "type": "bar",    "rect": [8, 66, 184, 10], "zOrder": 1,
@@ -451,11 +452,14 @@ one too.
 `ArtRenderer` composites with SkiaSharp, the one place the StreamDeck-Tools
 dependency earns its place:
 
-- **Dial tile** (56 px rendered, 28 px on the strip): the art centre-cropped
-  under rounded corners, a uniform dark scrim over the whole tile, and the
-  play/pause glyph centred in white. A corner badge is unreadable at that
-  size, so the whole tile carries the state. It is sent as a `data:` URI in
-  the pixmap item, only when the art or the state changes.
+- **Dial tile** (56 px, drawn 1:1): the art centre-cropped under rounded
+  corners, a uniform dark scrim over the whole tile, and the play/pause glyph
+  centred in white at about 60 percent of the tile. It spans both text rows on
+  the left, which is what makes it legible; the first version sat inside the
+  artist row at 28 px and read as a smudge. The text rows start at x 66, so
+  the title has 130 px instead of the full width, the price of art this size.
+  It is sent as a `data:` URI in the pixmap item, only when the art or the
+  state changes.
 - **Key image** (144 px): the art full-bleed with a dark translucent circle in
   the bottom-right corner and the glyph inside it. Without art, a large glyph
   on the dark background; with no media, the glyph dimmed.

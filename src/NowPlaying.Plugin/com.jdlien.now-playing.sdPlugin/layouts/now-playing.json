@@ -5,14 +5,14 @@
     {
       "key": "icon",
       "type": "pixmap",
-      "rect": [ 6, 5, 28, 28 ],
+      "rect": [ 4, 4, 56, 56 ],
       "zOrder": 1,
       "value": "imgs/icons/pause.svg"
     },
     {
       "key": "artist",
       "type": "text",
-      "rect": [ 38, 6, 158, 26 ],
+      "rect": [ 66, 6, 130, 26 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 400 },
@@ -23,7 +23,7 @@
     {
       "key": "track",
       "type": "text",
-      "rect": [ 8, 34, 184, 28 ],
+      "rect": [ 66, 34, 130, 28 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 600 },
