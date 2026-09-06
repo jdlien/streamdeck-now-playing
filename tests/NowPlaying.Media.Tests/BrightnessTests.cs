@@ -23,7 +23,7 @@ public class BrightnessTests
         var dimmed = on.Toggle();
         Assert.Equal(new BrightnessState(60, true), dimmed);
         Assert.Equal(BrightnessState.DimLevel, dimmed.Effective);
-        Assert.Equal(1, dimmed.Effective);
+        Assert.Equal(4, dimmed.Effective);
         Assert.Equal(on, dimmed.Toggle());
     }
 
@@ -31,8 +31,8 @@ public class BrightnessTests
     public void UndimmingFromNoBrighterThanTheGlowUsesTheFloor()
     {
         Assert.Equal(new BrightnessState(BrightnessState.RestoreFloor, false), new BrightnessState(0, true).Toggle());
-        Assert.Equal(new BrightnessState(BrightnessState.RestoreFloor, false), new BrightnessState(1, true).Toggle());
-        Assert.Equal(new BrightnessState(2, false), new BrightnessState(2, true).Toggle());
+        Assert.Equal(new BrightnessState(BrightnessState.RestoreFloor, false), new BrightnessState(4, true).Toggle());
+        Assert.Equal(new BrightnessState(6, false), new BrightnessState(6, true).Toggle());
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class BrightnessTests
 
         var dimmed = BrightnessRenderer.Render(new BrightnessState(60, true), "Stream Deck +", "tile");
         Assert.Equal("Dimmed  60%", dimmed.Track);
-        Assert.Equal(10, dimmed.BarValue);
+        Assert.Equal(40, dimmed.BarValue);
     }
 
     [Theory]

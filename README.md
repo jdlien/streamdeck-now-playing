@@ -54,7 +54,7 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
 - **Brightness**, a fourth action for a dial, again in the same layout: a sun
   tile, the deck model on the top row, "Brightness 60%" on the full-width
   row, the bar as the level. Turn to adjust (step configurable, 2% default),
-  press or tap to dim the screen to a 1% glow and back to the remembered
+  press or tap to dim the screen to a 4% glow and back to the remembered
   level; a glow rather than black so the deck never looks dead.
   Talks to the hardware directly, because the plugin protocol has no
   brightness command (see 5.10).
@@ -466,10 +466,12 @@ What the hardware cannot do, and how the plugin copes:
   back, and the plugin cannot see that. It re-applies its level on wake and on
   device reconnect, which covers the common cases; a mismatch after the app's
   own slider corrects itself on the next dial turn.
-- **The toggle dims to 1%, not 0.** Chosen after the first hardware session:
-  a glow keeps the deck readable, black looks like a fault. Adjusting while
-  dimmed turns it back on at the new level, as the volume dial unmutes.
-  Un-dimming from a level no brighter than the glow restores to 40%.
+- **The toggle dims to 4%, not 0.** Chosen after the first hardware session:
+  a glow keeps the deck readable, black looks like a fault. Measured on the
+  Stream Deck +: 1% and 2% are still black, so 4%, which is also a level the
+  2% step can reach by hand. Adjusting while dimmed turns it back on at the
+  new level, as the volume dial unmutes. Un-dimming from a level no brighter
+  than the glow restores to 40%.
 
 Marketplace note: the guidelines say nothing about plugins reaching the
 hardware directly. It is a review risk to flag in the submission notes, and a
@@ -622,7 +624,7 @@ Brightness dial:
 | Event | Behaviour |
 | --- | --- |
 | `dialRotate` | Level moves by `ticks` times the step (default 2%; the dial moves fast), applied to the hardware at once and saved to global settings. Adjusting while dimmed turns the screen back on. Rotation while pressed is ignored. |
-| `dialDown` | Toggle between a 1% glow and the remembered level. `dialUp` ignored. |
+| `dialDown` | Toggle between a 4% glow and the remembered level. `dialUp` ignored. |
 | `touchTap` | Short tap toggles; a hold is ignored. |
 
 Key action:

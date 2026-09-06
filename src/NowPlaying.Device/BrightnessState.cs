@@ -13,8 +13,12 @@ public sealed record BrightnessState(int Level, bool Dimmed)
     /// <summary>What a fresh install shows before anyone touches the dial.</summary>
     public const int DefaultLevel = 60;
 
-    /// <summary>What the toggle dims to: still visible, so the deck never looks dead.</summary>
-    public const int DimLevel = 1;
+    /// <summary>
+    /// What the toggle dims to: still visible, so the deck never looks dead.
+    /// Measured on a Stream Deck + on 2026-09-06: 1% and 2% are black, so 4%,
+    /// which a 2% step can also reach by hand.
+    /// </summary>
+    public const int DimLevel = 4;
 
     /// <summary>The level to restore to when un-dimming from a level at or below the dim level.</summary>
     public const int RestoreFloor = 40;
