@@ -98,6 +98,71 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
+    /// <summary>
+    /// The volume dial's tile, in the art tile's frame so the two dials match:
+    /// a dark rounded square with a white speaker, waves when live and a
+    /// cross when muted.
+    /// </summary>
+    public static byte[] RenderVolumeTile(bool muted, int size = DialTileSize)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+
+        var rect = new SKRect(0, 0, size, size);
+        var corner = size * 0.14f;
+        using var tile = new SKPaint { Color = new SKColor(0x2c, 0x2c, 0x32), IsAntialias = true };
+        canvas.DrawRoundRect(rect, corner, corner, tile);
+
+        DrawSpeaker(canvas, size / 2f, size / 2f, size * 0.62f, muted, muted ? DimGlyph : SKColors.White);
+        return Encode(surface);
+    }
+
+    /// <summary>Speaker body and cone with two sound arcs, or a cross when muted, fitted into a box of side <paramref name="box"/>.</summary>
+    private static void DrawSpeaker(SKCanvas canvas, float cx, float cy, float box, bool muted, SKColor color)
+    {
+        var half = box / 2f;
+        var offset = -half * 0.18f; // shift left so the arcs fit
+        using var fill = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Fill };
+
+        // Body: a small rounded rectangle; cone: a trapezoid opening to the right.
+        var bodyLeft = cx + offset - half * 0.62f;
+        var bodyRight = cx + offset - half * 0.28f;
+        canvas.DrawRoundRect(new SKRect(bodyLeft, cy - half * 0.28f, bodyRight, cy + half * 0.28f), half * 0.06f, half * 0.06f, fill);
+        using var cone = new SKPath();
+        cone.MoveTo(bodyRight - half * 0.02f, cy - half * 0.28f);
+        cone.LineTo(cx + offset + half * 0.12f, cy - half * 0.66f);
+        cone.LineTo(cx + offset + half * 0.12f, cy + half * 0.66f);
+        cone.LineTo(bodyRight - half * 0.02f, cy + half * 0.28f);
+        cone.Close();
+        canvas.DrawPath(cone, fill);
+
+        using var stroke = new SKPaint
+        {
+            Color = color,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = Math.Max(1.5f, half * 0.14f),
+            StrokeCap = SKStrokeCap.Round,
+        };
+
+        if (muted)
+        {
+            var x = cx + offset + half * 0.55f;
+            var r = half * 0.22f;
+            canvas.DrawLine(x - r, cy - r, x + r, cy + r, stroke);
+            canvas.DrawLine(x - r, cy + r, x + r, cy - r, stroke);
+            return;
+        }
+
+        var arcCentre = new SKPoint(cx + offset + half * 0.14f, cy);
+        foreach (var radius in new[] { half * 0.40f, half * 0.70f })
+        {
+            var oval = new SKRect(arcCentre.X - radius, arcCentre.Y - radius, arcCentre.X + radius, arcCentre.Y + radius);
+            canvas.DrawArc(oval, -42f, 84f, false, stroke);
+        }
+    }
+
     // -- text ---------------------------------------------------------------
 
     private static void DrawTextBand(SKCanvas canvas, int size, string title, string artist)

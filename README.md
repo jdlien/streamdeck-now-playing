@@ -45,6 +45,12 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   a configurable hold (next by default).
 - **Preferred player**, a global setting shared by both actions: automatic, or
   pin one of the players Windows currently reports.
+- **Volume**, a third action for a dial, in the same layout as Now Playing:
+  a speaker tile, the default output device's name on the top row,
+  "Volume 42%" on the full-width row, the bar as the level, and the scale's
+  ends as the small labels. Turn to adjust (step size configurable), press or
+  tap to mute. Follows the device Windows uses for playback and reflects
+  changes made anywhere else, such as the keyboard or the tray.
 
 ## 2. Verified environment
 
@@ -148,18 +154,20 @@ and paused:
 ```
 NowPlaying.slnx
   src/NowPlaying.Media/          class library: Windows media session wrapper
-  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe now, watch in milestone 1
+  src/NowPlaying.Audio/          class library: default output device volume over NAudio's WASAPI wrappers
+  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe, watch, volume
   src/NowPlaying.Plugin/         Stream Deck plugin (StreamDeck-Tools); builds into the sdPlugin folder
     NowPlayingAction.cs          the dial action
     NowPlayingKeyAction.cs       the key action
+    VolumeAction.cs              the volume dial; VolumeHub.cs, VolumeRenderer.cs alongside
     FeedbackRenderer.cs          snapshot -> layout items, diffed (pure)
     ArtRenderer.cs               album art + glyph compositing with SkiaSharp (pure)
     MediaHub.cs                  the one shared media service
     PropertyInspectorBridge.cs   the "sessions" data source and the preferred-player global setting
     com.jdlien.now-playing.sdPlugin/
       manifest.json
-      layouts/now-playing.json
-      pi/dial.html, pi/key.html  property inspectors on sdpi-components v4 (local copy)
+      layouts/now-playing.json, layouts/volume.json   same rectangles, different defaults
+      pi/dial.html, pi/key.html, pi/volume.html       property inspectors on sdpi-components v4 (local copy)
       imgs/icons/                play.svg, pause.svg for the layout's pixmap item
       imgs/plugin/, imgs/actions/  placeholder PNG icons for the Stream Deck app
       bin/                       build output, git-ignored; manifest CodePath is bin/NowPlaying.exe
@@ -394,6 +402,27 @@ Stop button leaves a loaded track that a dial press will resume. The Rust `smtc`
 implementation; if one shared component across both projects ever matters more
 than staying in C#, it is the one to lift.
 
+### 5.9 System volume
+
+The volume dial reads and sets the default multimedia render device's master
+volume through Core Audio's `IAudioEndpointVolume`, via the `NAudio.Wasapi`
+package (the one extra dependency; it wraps the COM interfaces and the
+`IMMNotificationClient` device notifications). `VolumeService` in
+`NowPlaying.Audio`:
+
+- Binds to the default device at start and re-binds, after a 250 ms debounce,
+  when Windows changes the default or the bound device goes away. Windows
+  sends one default-changed notification per role, hence the debounce.
+- Publishes every change through the endpoint's volume notification, so the
+  strip follows the keyboard keys, the tray, and other apps as well as the
+  dial. Its own writes publish immediately rather than waiting for the echo.
+- Reports "No audio device" when there is no default render device, and every
+  command returns false, which the action turns into `showAlert`.
+
+Measured 2026-09-06 through `nowplaying-cli volume`: bound to the display's
+audio at 84%, stepped to 86 and back, muted and unmuted, each reflected within
+the same second.
+
 ## 6. Display design
 
 ### 6.1 Layout
@@ -527,6 +556,14 @@ own; a `showTitle` setting turns the drawn title and artist off.
 
 `ticks` can exceed 1 per event on a fast spin, which is why the policy counts
 events, not ticks. One detent still equals one track at normal speed.
+
+Volume dial:
+
+| Event | Behaviour |
+| --- | --- |
+| `dialRotate` | Level moves by `ticks` times the step (default 2%), so a fast spin travels further. Adjusting while muted unmutes, as the keyboard keys do. Rotation while pressed is ignored. |
+| `dialDown` | Toggle mute. `dialUp` ignored. |
+| `touchTap` | Short tap toggles mute; a hold is ignored. |
 
 Key action:
 
@@ -703,7 +740,7 @@ Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
   by email. Plugins needing hardware also need a short video. Free is fine;
   name and monetization cannot change afterwards. No code signing requirement
   appears in the docs.
-- Guideline items this plugin now meets: two actions (they ask for 2 to 30),
+- Guideline items this plugin now meets: three actions (they ask for 2 to 30),
   configurable actions with a property inspector, monochrome white action and
   category icons, `showAlert` on failure, layout updates well under 10 per
   second, a UUID with author and plugin name that must never change.

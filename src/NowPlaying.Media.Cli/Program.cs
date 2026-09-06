@@ -31,10 +31,13 @@ internal static class Program
                 return await ProbeAsync(asJson);
             case "watch":
                 return await WatchAsync(asJson, ticks);
+            case "volume":
+                return await VolumeAsync();
             default:
-                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch] [--json] [--ticks]");
+                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch|volume] [--json] [--ticks]");
                 Console.Error.WriteLine("  probe   list every Windows media session and exit");
                 Console.Error.WriteLine("  watch   print a line per snapshot change; reads next/prev/toggle/refresh/quit on stdin");
+                Console.Error.WriteLine("  volume  print the default output device's volume; reads up/down/mute/quit on stdin");
                 Console.Error.WriteLine("  --ticks in watch mode, also print the extrapolated position once a second while playing");
                 return 2;
         }
@@ -127,6 +130,46 @@ internal static class Program
 
         return 0;
     }
+
+    // -- volume -----------------------------------------------------------
+
+    private static async Task<int> VolumeAsync()
+    {
+        using var service = new NowPlaying.Audio.VolumeService(message => Console.Error.WriteLine($"[vol {DateTime.Now:HH:mm:ss.fff}] {message}"));
+        service.Changed += PrintVolume;
+        service.Start();
+        PrintVolume(service.Current);
+
+        Console.Error.WriteLine("commands: up | down | mute | quit   (up/down move 2%)");
+        while (await Console.In.ReadLineAsync() is { } line)
+        {
+            var command = line.Trim().ToLowerInvariant();
+            switch (command)
+            {
+                case "":
+                    break;
+                case "up":
+                    Report(command, service.AdjustBy(0.02f));
+                    break;
+                case "down":
+                    Report(command, service.AdjustBy(-0.02f));
+                    break;
+                case "mute":
+                    Report(command, service.ToggleMute());
+                    break;
+                case "quit" or "q" or "exit":
+                    return 0;
+                default:
+                    Console.Error.WriteLine($"unknown command: {command}");
+                    break;
+            }
+        }
+
+        return 0;
+    }
+
+    private static void PrintVolume(NowPlaying.Audio.VolumeSnapshot volume) =>
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] volume  {volume.Percent,3}%  {(volume.Muted ? "muted " : "live  ")} {volume.DeviceName}");
 
     private static void Report(string command, bool accepted) =>
         Console.Error.WriteLine($"[cmd {DateTime.Now:HH:mm:ss.fff}] {command}: {(accepted ? "accepted" : "rejected")}");
