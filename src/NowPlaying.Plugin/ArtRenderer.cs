@@ -47,8 +47,8 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
-    /// <summary>The layout's icon slot is 40 x 40; the tile is drawn 1:1 to avoid resampling on the strip.</summary>
-    public const int DialTileSize = 40;
+    /// <summary>The layout's icon slot is 36 x 36; the tile is drawn 1:1 to avoid resampling on the strip.</summary>
+    public const int DialTileSize = 36;
 
     /// <summary>
     /// The dial's icon tile: the art under a light scrim with the glyph

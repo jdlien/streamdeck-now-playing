@@ -405,19 +405,19 @@ property inspector.
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
   "id": "com.jdlien.now-playing.layout",
   "items": [
-    { "key": "icon",     "type": "pixmap", "rect": [2, 2, 40, 40], "zOrder": 1 },
-    { "key": "artist",   "type": "text",   "rect": [48, 9, 148, 26], "zOrder": 1,
+    { "key": "icon",     "type": "pixmap", "rect": [2, 2, 36, 36], "zOrder": 1 },
+    { "key": "artist",   "type": "text",   "rect": [44, 7, 152, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
-    { "key": "track",    "type": "text",   "rect": [4, 42, 192, 26], "zOrder": 1,
+    { "key": "track",    "type": "text",   "rect": [4, 38, 192, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 600 },
       "text-overflow": "ellipsis", "color": "white" },
-    { "key": "progress", "type": "bar",    "rect": [8, 70, 184, 8], "zOrder": 1,
+    { "key": "progress", "type": "bar",    "rect": [8, 68, 184, 8], "zOrder": 1,
       "subtype": 0, "border_w": 0, "range": { "min": 0, "max": 1000 },
       "bar_bg_c": "#333333", "bar_fill_c": "white", "value": 0 },
-    { "key": "elapsed",  "type": "text",   "rect": [8, 80, 80, 18], "zOrder": 1,
+    { "key": "elapsed",  "type": "text",   "rect": [8, 79, 80, 18], "zOrder": 1,
       "alignment": "left", "font": { "size": 12, "weight": 400 }, "color": "lightGray" },
-    { "key": "total",    "type": "text",   "rect": [112, 80, 80, 18], "zOrder": 1,
+    { "key": "total",    "type": "text",   "rect": [112, 79, 80, 18], "zOrder": 1,
       "alignment": "right", "font": { "size": 12, "weight": 400 }, "color": "lightGray" }
   ]
 }
@@ -457,16 +457,16 @@ one too.
 `ArtRenderer` composites with SkiaSharp, the one place the StreamDeck-Tools
 dependency earns its place:
 
-- **Dial tile** (40 px, drawn 1:1): the art centre-cropped under rounded
+- **Dial tile** (36 px, drawn 1:1): the art centre-cropped under rounded
   corners, a uniform dark scrim over the whole tile, and the play/pause glyph
   centred in white at about 60 percent of the tile. It sits in the top-left
   with the artist beside it and the title directly beneath it at full width.
-  Two sizes were tried first: 28 px inside the artist row read as a smudge,
-  and 56 px spanning both rows cost the title a third of its width, which
-  lost most song titles. The 40 px stack is the compromise: the title row
-  moved down to y 42, the bar slimmed to 8 px, and the times rows to 18 px.
-  It is sent as a `data:` URI in the pixmap item, only when the art or the
-  state changes.
+  Sizes tried on the preview: 28 px inside the artist row read as a smudge;
+  56 px spanning both rows cost the title a third of its width and lost most
+  song titles; 40 px pushed the title too far down. 36 px is where the
+  vertical space felt evenly spread: title row at y 38, bar at 68 and 8 px
+  tall, times at 79. It is sent as a `data:` URI in the pixmap item, only
+  when the art or the state changes.
 - **Key image** (144 px): the art full-bleed with a dark translucent circle in
   the bottom-right corner and the glyph inside it. Without art, a large glyph
   on the dark background; with no media, the glyph dimmed.
