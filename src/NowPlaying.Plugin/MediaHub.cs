@@ -14,10 +14,17 @@ internal static class MediaHub
     private static MediaSessionService? _service;
     private static int _attached;
 
-    /// <summary>Raised on the service's loop whenever the snapshot changes.</summary>
+    /// <summary>Raised on the service's loop whenever the snapshot changes significantly.</summary>
     public static event Action<NowPlayingSnapshot>? SnapshotChanged;
 
+    /// <summary>Raised on the service's loop whenever the artwork changes.</summary>
+    public static event Action<Artwork?>? ArtworkChanged;
+
     public static NowPlayingSnapshot Current => _service?.Current ?? NowPlayingSnapshot.Empty;
+
+    public static Artwork? CurrentArtwork => _service?.CurrentArtwork;
+
+    public static IReadOnlyList<string> KnownAppIds => _service?.KnownAppIds ?? Array.Empty<string>();
 
     public static void Attach()
     {
@@ -34,6 +41,7 @@ internal static class MediaHub
                 Log = message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[media] {message}"),
             });
             service.SnapshotChanged += snapshot => SnapshotChanged?.Invoke(snapshot);
+            service.ArtworkChanged += artwork => ArtworkChanged?.Invoke(artwork);
             _service = service;
 
             _ = service.StartAsync().ContinueWith(
@@ -63,6 +71,8 @@ internal static class MediaHub
         }
     }
 
+    public static void SetPreferredAppId(string? appId) => _service?.SetPreferredAppId(appId);
+
     public static Task<bool> NextAsync() => _service?.NextAsync() ?? Task.FromResult(false);
 
     public static Task<bool> PreviousAsync() => _service?.PreviousAsync() ?? Task.FromResult(false);
@@ -70,4 +80,13 @@ internal static class MediaHub
     public static Task<bool> TogglePlayPauseAsync() => _service?.TogglePlayPauseAsync() ?? Task.FromResult(false);
 
     public static Task RefreshAsync(bool full) => _service?.RefreshAsync(full) ?? Task.CompletedTask;
+
+    /// <summary>Run a named transport command; "none" succeeds without doing anything.</summary>
+    public static Task<bool> RunAsync(string command) => command switch
+    {
+        "toggle" => TogglePlayPauseAsync(),
+        "next" => NextAsync(),
+        "previous" => PreviousAsync(),
+        _ => Task.FromResult(true),
+    };
 }

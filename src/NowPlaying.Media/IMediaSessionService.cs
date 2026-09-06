@@ -10,8 +10,17 @@ public interface IMediaSessionService : IAsyncDisposable
     /// <summary>The latest published snapshot. Never blocks on the media API.</summary>
     NowPlayingSnapshot Current { get; }
 
-    /// <summary>Raised on the service's own loop whenever <see cref="Current"/> changes.</summary>
+    /// <summary>The chosen session's artwork, or null when there is none. Never blocks on the media API.</summary>
+    Artwork? CurrentArtwork { get; }
+
+    /// <summary>App ids of every session Windows currently reports, in the manager's order.</summary>
+    IReadOnlyList<string> KnownAppIds { get; }
+
+    /// <summary>Raised on the service's own loop whenever <see cref="Current"/> changes significantly.</summary>
     event Action<NowPlayingSnapshot>? SnapshotChanged;
+
+    /// <summary>Raised on the service's own loop whenever <see cref="CurrentArtwork"/> changes.</summary>
+    event Action<Artwork?>? ArtworkChanged;
 
     /// <summary>Start listening and complete once the first snapshot is in place. Later calls are no-ops.</summary>
     Task StartAsync(CancellationToken cancellationToken = default);
@@ -22,6 +31,9 @@ public interface IMediaSessionService : IAsyncDisposable
     /// re-enumerates sessions and re-ranks.
     /// </summary>
     Task RefreshAsync(bool full, CancellationToken cancellationToken = default);
+
+    /// <summary>Prefer this app whenever it has a candidate session; null or empty follows the ranking alone.</summary>
+    void SetPreferredAppId(string? appId);
 
     /// <summary>Skip to the next track on the chosen session. False when there is none or the player refuses.</summary>
     Task<bool> NextAsync();

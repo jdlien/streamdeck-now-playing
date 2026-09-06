@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Now Playing Key</title>
+  <script src="sdpi-components.js"></script>
+</head>
+<body>
+  <sdpi-item label="Press">
+    <sdpi-select setting="pressAction" default="toggle">
+      <option value="toggle">Play / pause</option>
+      <option value="next">Next track</option>
+      <option value="previous">Previous track</option>
+      <option value="none">Nothing (display only)</option>
+    </sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="Hold">
+    <sdpi-select setting="longPressAction" default="next">
+      <option value="next">Next track</option>
+      <option value="previous">Previous track</option>
+      <option value="toggle">Play / pause</option>
+      <option value="none">Nothing</option>
+    </sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="Show">
+    <sdpi-checkbox setting="showArt" default="true" label="Album art"></sdpi-checkbox>
+    <sdpi-checkbox setting="showTitle" default="true" label="Track title (styled by the Title settings above)"></sdpi-checkbox>
+  </sdpi-item>
+
+  <sdpi-item label="Player">
+    <sdpi-select setting="preferredApp" global default="auto" datasource="sessions" hot-reload show-refresh
+                 loading="Looking for players…" placeholder="Automatic (follow Windows)"></sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="">
+    <small>Automatic follows whatever is playing. Pick a player to keep it on the key even when a browser starts playing. Only players with an open media session are listed; press refresh after starting one.</small>
+  </sdpi-item>
+</body>
+</html>

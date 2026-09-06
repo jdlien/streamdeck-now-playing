@@ -35,6 +35,17 @@ Display:
 
 The same media session is used for the displayed information and all commands.
 
+Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
+
+- **Album art.** The session's thumbnail sits behind the play/pause icon on the
+  strip (on by default, switchable in the action's settings).
+- **Now Playing Key**, a second action for any key: album art with a play or
+  pause badge in the corner, the track title in the key's title field, a
+  configurable press (play/pause by default, or next, previous, nothing) and
+  a configurable hold (next by default).
+- **Preferred player**, a global setting shared by both actions: automatic, or
+  pin one of the players Windows currently reports.
+
 ## 2. Verified environment
 
 | Item | Finding |
@@ -139,9 +150,16 @@ NowPlaying.slnx
   src/NowPlaying.Media/          class library: Windows media session wrapper
   src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe now, watch in milestone 1
   src/NowPlaying.Plugin/         Stream Deck plugin (StreamDeck-Tools); builds into the sdPlugin folder
+    NowPlayingAction.cs          the dial action
+    NowPlayingKeyAction.cs       the key action
+    FeedbackRenderer.cs          snapshot -> layout items, diffed (pure)
+    ArtRenderer.cs               album art + glyph compositing with SkiaSharp (pure)
+    MediaHub.cs                  the one shared media service
+    PropertyInspectorBridge.cs   the "sessions" data source and the preferred-player global setting
     com.jdlien.now-playing.sdPlugin/
       manifest.json
       layouts/now-playing.json
+      pi/dial.html, pi/key.html  property inspectors on sdpi-components v4 (local copy)
       imgs/icons/                play.svg, pause.svg for the layout's pixmap item
       imgs/plugin/, imgs/actions/  placeholder PNG icons for the Stream Deck app
       bin/                       build output, git-ignored; manifest CodePath is bin/NowPlaying.exe
@@ -387,7 +405,7 @@ property inspector.
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/layout.json",
   "id": "com.jdlien.now-playing.layout",
   "items": [
-    { "key": "icon",     "type": "pixmap", "rect": [8, 8, 24, 24], "zOrder": 1 },
+    { "key": "icon",     "type": "pixmap", "rect": [6, 5, 28, 28], "zOrder": 1 },
     { "key": "artist",   "type": "text",   "rect": [38, 6, 158, 26], "zOrder": 1,
       "alignment": "left", "font": { "size": 16, "weight": 400 },
       "text-overflow": "ellipsis", "color": "lightGray" },
@@ -421,6 +439,34 @@ Notes from the layout schema:
   artist. The elapsed and total times sit under the bar at 12 px, as `m:ss`
   or `h:mm:ss` from one hour; the bar moved up 10 px to make room. They are
   blank whenever the bar is hidden.
+
+### 6.1.1 Album art and the key image
+
+The media service exposes the chosen session's thumbnail as an `Artwork`
+(bytes plus a content hash) alongside the snapshot, and raises a separate
+change event for it, because the thumbnail usually arrives a moment after the
+text. Chrome and Apple Music supply PNGs of roughly 20 KB; foobar2000 supplies
+one too.
+
+`ArtRenderer` composites with SkiaSharp, the one place the StreamDeck-Tools
+dependency earns its place:
+
+- **Dial tile** (56 px rendered, 28 px on the strip): the art centre-cropped
+  under rounded corners, a uniform dark scrim over the whole tile, and the
+  play/pause glyph centred in white. A corner badge is unreadable at that
+  size, so the whole tile carries the state. It is sent as a `data:` URI in
+  the pixmap item, only when the art or the state changes.
+- **Key image** (144 px): the art full-bleed with a dark translucent circle in
+  the bottom-right corner and the glyph inside it. Without art, a large glyph
+  on the dark background; with no media, the glyph dimmed.
+- **Legibility** comes from the fixed scrim under a white glyph rather than
+  from estimating the art's brightness: every cover gets the same treatment,
+  and it never flips between tracks. The pixels are ours, so sampling the
+  region under the glyph and switching to a dark glyph on light art is a small
+  later addition if some covers still fight the scrim.
+
+The key's title is set through the app's own title mechanism, so the user's
+font and alignment settings apply and a `showTitle` setting turns it off.
 
 ### 6.2 States
 
@@ -461,6 +507,25 @@ Notes from the layout schema:
 
 `ticks` can exceed 1 per event on a fast spin, which is why the policy counts
 events, not ticks. One detent still equals one track at normal speed.
+
+Key action:
+
+| Event | Behaviour |
+| --- | --- |
+| `keyDown` | Record the time. Nothing runs yet. |
+| `keyUp` after less than 500 ms | Run the press command (default play/pause). |
+| `keyUp` after 500 ms or more | Run the hold command (default next track). The press command does not also run. |
+
+Both actions call `showAlert` when the player rejects a command or there is
+no session, which the Marketplace guidelines ask for.
+
+Settings live in property inspectors built on sdpi-components v4, bundled
+locally as the guidelines recommend. Per action: `showArt` on both,
+`pressAction`, `longPressAction`, and `showTitle` on the key. Global, shared
+by every instance: `preferredApp`, whose select is filled by a `sessions`
+data source the plugin answers with whatever Windows currently reports. Each
+action writes its defaults back into its settings on first appearance so the
+inspector shows real values instead of blanks.
 
 Multiple instances: the user may place the action on several dials or pages.
 Every instance shares the single MediaSessionService and each visible instance
@@ -600,9 +665,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
    at the em dash and drop the album?
 2. foobar2000 progress: accept no bar (v1 default), or add per-app position
    reads through its `foo_beefweb` HTTP API later?
-3. Later candidates, not planned: album art in the icon slot (thumbnail is
-   already available), a preferred-player setting, long-touch or press-and-rotate
-   mapped to seek.
+3. Later candidates, not planned: long-touch or press-and-rotate mapped to
+   seek, a luminance-aware glyph colour on the art, a proper plugin icon and
+   Marketplace listing assets (section 13).
+
+## 13. Marketplace
+
+Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
+
+- Submission is a Maker account, an English listing (name, description,
+  256 and 512 px plugin icon, thumbnail, gallery images, links), the
+  `.streamDeckPlugin` from `streamdeck pack`, and a 4 to 10 working day review
+  by email. Plugins needing hardware also need a short video. Free is fine;
+  name and monetization cannot change afterwards. No code signing requirement
+  appears in the docs.
+- Guideline items this plugin now meets: two actions (they ask for 2 to 30),
+  configurable actions with a property inspector, monochrome white action and
+  category icons, `showAlert` on failure, layout updates well under 10 per
+  second, a UUID with author and plugin name that must never change.
+- Still needed: a real plugin icon (the placeholder triangle does not
+  "accurately portray" anything), gallery screenshots, listing copy, and a
+  name check against the existing "Current Media (Now Playing)" plugin;
+  something like "Now Playing Dial" avoids the collision.
 
 ## References
 

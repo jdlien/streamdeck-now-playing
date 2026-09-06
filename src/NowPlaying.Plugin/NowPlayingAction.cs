@@ -1,11 +1,12 @@
 using BarRaider.SdTools;
 using BarRaider.SdTools.Payloads;
+using Newtonsoft.Json.Linq;
 using NowPlaying.Media;
 
 namespace NowPlaying.Plugin;
 
 /// <summary>
-/// The one action: a dial plus its touch-strip segment. StreamDeck-Tools
+/// The dial action: a dial plus its touch-strip segment. StreamDeck-Tools
 /// creates an instance on willAppear and disposes it on willDisappear, so
 /// the constructor is "appear" and Dispose is "disappear".
 ///
@@ -17,19 +18,43 @@ public sealed class NowPlayingAction : EncoderBase
     /// <summary>Minimum gap between skips. Extra rotate events inside it are dropped, never queued.</summary>
     private static readonly TimeSpan SkipInterval = TimeSpan.FromMilliseconds(200);
 
+    /// <summary>Path of the custom layout, relative to the plugin folder. Also named in the manifest.</summary>
+    private const string LayoutPath = "layouts/now-playing.json";
+
+    private const string ShowArtKey = "showArt";
+
     private readonly object _gate = new();
     private readonly Action<NowPlayingSnapshot> _onSnapshot;
+    private readonly Action<Artwork?> _onArtwork;
     private FeedbackFrame? _lastFrame;
     private DateTimeOffset _lastSkipAt = DateTimeOffset.MinValue;
+    private bool _showArt = true;
+    private Artwork? _artwork;
+    private (string ArtKey, PlaybackState State, string DataUri)? _iconCache;
 
     public NowPlayingAction(SDConnection connection, InitialPayload payload)
         : base(connection, payload)
     {
-        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] appear: context {connection.ContextId}");
+        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] dial appear: context {connection.ContextId}");
+
+        ApplySettings(payload.Settings, writeBackDefaults: true);
+        PropertyInspectorBridge.Attach(connection);
+        _ = connection.GetGlobalSettingsAsync();
 
         _onSnapshot = snapshot => Push(snapshot, full: false);
+        _onArtwork = artwork =>
+        {
+            lock (_gate)
+            {
+                _artwork = artwork;
+            }
+
+            Push(MediaHub.Current, full: false);
+        };
         MediaHub.SnapshotChanged += _onSnapshot;
+        MediaHub.ArtworkChanged += _onArtwork;
         MediaHub.Attach();
+        _artwork = MediaHub.CurrentArtwork;
 
         connection.OnSystemDidWakeUp += (_, _) =>
         {
@@ -45,9 +70,6 @@ public sealed class NowPlayingAction : EncoderBase
 
         _ = ApplyLayoutAndPushAsync();
     }
-
-    /// <summary>Path of the custom layout, relative to the plugin folder. Also named in the manifest.</summary>
-    private const string LayoutPath = "layouts/now-playing.json";
 
     /// <summary>
     /// Re-apply the layout file, then push everything. Setting the layout
@@ -93,18 +115,11 @@ public sealed class NowPlayingAction : EncoderBase
             _lastSkipAt = now;
         }
 
-        if (payload.Ticks > 0)
-        {
-            Fire("next", MediaHub.NextAsync());
-        }
-        else
-        {
-            Fire("previous", MediaHub.PreviousAsync());
-        }
+        Fire(payload.Ticks > 0 ? "next" : "previous");
     }
 
     /// <summary>Toggle once per press. DialUp is deliberately a no-op.</summary>
-    public override void DialDown(DialPayload payload) => Fire("toggle (dial)", MediaHub.TogglePlayPauseAsync());
+    public override void DialDown(DialPayload payload) => Fire("toggle");
 
     public override void DialUp(DialPayload payload)
     {
@@ -118,23 +133,27 @@ public sealed class NowPlayingAction : EncoderBase
             return;
         }
 
-        Fire("toggle (touch)", MediaHub.TogglePlayPauseAsync());
+        Fire("toggle");
     }
 
-    private static void Fire(string name, Task<bool> command) =>
-        _ = command.ContinueWith(
-            task =>
+    private void Fire(string command) => _ = RunAsync(command);
+
+    private async Task RunAsync(string command)
+    {
+        try
+        {
+            var accepted = await MediaHub.RunAsync(command);
+            Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] dial {command}: {(accepted ? "accepted" : "rejected")}");
+            if (!accepted)
             {
-                if (task.IsFaulted)
-                {
-                    Logger.Instance.LogMessage(TracingLevel.ERROR, $"[action] {name} failed: {task.Exception?.GetBaseException().Message}");
-                }
-                else
-                {
-                    Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] {name}: {(task.Result ? "accepted" : "rejected")}");
-                }
-            },
-            TaskScheduler.Default);
+                await Connection.ShowAlert();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.LogMessage(TracingLevel.ERROR, $"[action] dial {command} failed: {ex.Message}");
+        }
+    }
 
     // -- display --------------------------------------------------------------
 
@@ -150,7 +169,7 @@ public sealed class NowPlayingAction : EncoderBase
         Dictionary<string, object> payload;
         lock (_gate)
         {
-            var frame = FeedbackRenderer.Render(snapshot, DateTimeOffset.UtcNow);
+            var frame = FeedbackRenderer.Render(snapshot, DateTimeOffset.UtcNow, IconOverrideFor(snapshot.State));
             payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
         }
@@ -161,6 +180,32 @@ public sealed class NowPlayingAction : EncoderBase
         }
 
         _ = SendAsync(payload);
+    }
+
+    /// <summary>The art tile as a data URI when art is wanted and available; cached per (art, state). Call under the gate.</summary>
+    private string? IconOverrideFor(PlaybackState state)
+    {
+        if (!_showArt || _artwork is null || state == PlaybackState.None)
+        {
+            return null;
+        }
+
+        if (_iconCache is { } cached && cached.ArtKey == _artwork.Key && cached.State == state)
+        {
+            return cached.DataUri;
+        }
+
+        try
+        {
+            var dataUri = ArtRenderer.ToDataUri(ArtRenderer.RenderDialIcon(state, _artwork.Bytes));
+            _iconCache = (_artwork.Key, state, dataUri);
+            return dataUri;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] dial art render failed: {ex.Message}");
+            return null;
+        }
     }
 
     private async Task SendAsync(Dictionary<string, object> payload)
@@ -179,16 +224,33 @@ public sealed class NowPlayingAction : EncoderBase
 
     public override void ReceivedSettings(ReceivedSettingsPayload payload)
     {
+        ApplySettings(payload.Settings, writeBackDefaults: false);
+        Push(MediaHub.Current, full: false);
     }
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload)
+    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) =>
+        MediaHub.SetPreferredAppId(PropertyInspectorBridge.PreferredAppFrom(payload.Settings));
+
+    private void ApplySettings(JObject? settings, bool writeBackDefaults)
     {
+        lock (_gate)
+        {
+            _showArt = SettingsReader.GetBool(settings, ShowArtKey, fallback: true);
+        }
+
+        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, ShowArtKey))
+        {
+            var filled = settings is null ? new JObject() : (JObject)settings.DeepClone();
+            filled[ShowArtKey] = _showArt;
+            _ = Connection.SetSettingsAsync(filled);
+        }
     }
 
     public override void Dispose()
     {
         MediaHub.SnapshotChanged -= _onSnapshot;
+        MediaHub.ArtworkChanged -= _onArtwork;
         MediaHub.Detach();
-        Logger.Instance.LogMessage(TracingLevel.INFO, "[action] disappear");
+        Logger.Instance.LogMessage(TracingLevel.INFO, "[action] dial disappear");
     }
 }

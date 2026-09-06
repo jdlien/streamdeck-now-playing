@@ -5,7 +5,7 @@
     {
       "key": "icon",
       "type": "pixmap",
-      "rect": [ 8, 8, 24, 24 ],
+      "rect": [ 6, 5, 28, 28 ],
       "zOrder": 1,
       "value": "imgs/icons/pause.svg"
     },

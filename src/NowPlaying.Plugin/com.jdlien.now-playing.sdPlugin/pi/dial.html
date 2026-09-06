@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Now Playing</title>
+  <script src="sdpi-components.js"></script>
+</head>
+<body>
+  <sdpi-item label="Album art">
+    <sdpi-checkbox setting="showArt" default="true" label="Show album art behind the play/pause icon"></sdpi-checkbox>
+  </sdpi-item>
+
+  <sdpi-item label="Player">
+    <sdpi-select setting="preferredApp" global default="auto" datasource="sessions" hot-reload show-refresh
+                 loading="Looking for players…" placeholder="Automatic (follow Windows)"></sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="">
+    <small>Automatic follows whatever is playing. Pick a player to keep it on the strip even when a browser starts playing. Only players with an open media session are listed; press refresh after starting one.</small>
+  </sdpi-item>
+</body>
+</html>

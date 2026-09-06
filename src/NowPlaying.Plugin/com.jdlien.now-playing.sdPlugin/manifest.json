@@ -2,9 +2,9 @@
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "com.jdlien.now-playing",
   "Name": "Now Playing",
-  "Version": "0.1.0.0",
+  "Version": "0.2.0.0",
   "Author": "JD Lien",
-  "Description": "Shows the current Windows media session on a Stream Deck + dial and controls playback with it.",
+  "Description": "Shows the current Windows media session on a Stream Deck + dial or a key, with album art, progress, and playback control.",
   "URL": "https://github.com/jdlien/streamdeck-now-playing",
   "Icon": "imgs/plugin/marketplace",
   "Category": "Now Playing",
@@ -27,6 +27,7 @@
       "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause.",
       "Icon": "imgs/actions/now-playing/icon",
       "Controllers": [ "Encoder" ],
+      "PropertyInspectorPath": "pi/dial.html",
       "Encoder": {
         "layout": "layouts/now-playing.json",
         "TriggerDescription": {
@@ -42,6 +43,22 @@
       ],
       "SupportedInMultiActions": false,
       "UserTitleEnabled": false
+    },
+    {
+      "UUID": "com.jdlien.now-playing.key",
+      "Name": "Now Playing Key",
+      "Tooltip": "Album art and play state on a key. Press for play/pause, hold for next track; both configurable.",
+      "Icon": "imgs/actions/now-playing-key/icon",
+      "Controllers": [ "Keypad" ],
+      "PropertyInspectorPath": "pi/key.html",
+      "States": [
+        {
+          "Image": "imgs/actions/now-playing-key/key",
+          "TitleAlignment": "bottom",
+          "FontSize": 9
+        }
+      ],
+      "SupportedInMultiActions": false
     }
   ]
 }

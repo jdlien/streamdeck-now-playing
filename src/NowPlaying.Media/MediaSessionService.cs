@@ -1,6 +1,8 @@
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using Windows.Foundation;
 using Windows.Media.Control;
+using Windows.Storage.Streams;
 using PlaybackStatus = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus;
 using Session = Windows.Media.Control.GlobalSystemMediaTransportControlsSession;
 using SessionManager = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager;
@@ -33,11 +35,15 @@ public sealed class MediaSessionService : IMediaSessionService
     private DateTimeOffset? _changingSince;
     private CancellationTokenSource? _metadataDebounce;
     private NowPlayingSnapshot _current = NowPlayingSnapshot.Empty;
+    private Artwork? _currentArtwork;
+    private volatile IReadOnlyList<string> _knownAppIds = Array.Empty<string>();
+    private string? _preferredAppId;
     private int _started;
 
     public MediaSessionService(MediaSessionServiceOptions? options = null)
     {
         _options = options ?? new MediaSessionServiceOptions();
+        _preferredAppId = string.IsNullOrEmpty(_options.PreferredAppId) ? null : _options.PreferredAppId;
         _queue = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -56,7 +62,24 @@ public sealed class MediaSessionService : IMediaSessionService
         }
     }
 
+    public Artwork? CurrentArtwork
+    {
+        get
+        {
+            lock (_currentGate)
+            {
+                return _currentArtwork;
+            }
+        }
+    }
+
+    public IReadOnlyList<string> KnownAppIds => _knownAppIds;
+
     public event Action<NowPlayingSnapshot>? SnapshotChanged;
+
+    public event Action<Artwork?>? ArtworkChanged;
+
+    public void SetPreferredAppId(string? appId) => Post(new SetPreferred(string.IsNullOrEmpty(appId) ? null : appId));
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -223,6 +246,16 @@ public sealed class MediaSessionService : IMediaSessionService
             case Command command:
                 command.Result.TrySetResult(await ExecuteAsync(command.Kind, ct).ConfigureAwait(false));
                 break;
+
+            case SetPreferred preferred:
+                if (preferred.AppId != _preferredAppId)
+                {
+                    _preferredAppId = preferred.AppId;
+                    Log($"preferred app: {preferred.AppId ?? "<automatic>"}");
+                    await RerankAsync(ct).ConfigureAwait(false);
+                }
+
+                break;
         }
     }
 
@@ -373,6 +406,7 @@ public sealed class MediaSessionService : IMediaSessionService
 
         _sessions.Clear();
         _sessions.AddRange(next);
+        _knownAppIds = next.Select(t => t.AppId).ToArray();
     }
 
     private void Detach(Tracked tracked)
@@ -458,7 +492,7 @@ public sealed class MediaSessionService : IMediaSessionService
             facts.Add(new SessionFacts(tracked.AppId, status, tracked.AppId.Length > 0 && tracked.AppId == currentId));
         }
 
-        var winnerFacts = SessionRanking.Choose(facts, _options.PreferredAppId);
+        var winnerFacts = SessionRanking.Choose(facts, _preferredAppId);
         var winner = winnerFacts is null ? null : _sessions.First(t => t.AppId == winnerFacts.AppId);
 
         if (winner != _chosen)
@@ -569,6 +603,7 @@ public sealed class MediaSessionService : IMediaSessionService
                 tracked.AlbumArtist = (props.AlbumArtist ?? "").Trim();
                 tracked.AlbumTitle = (props.AlbumTitle ?? "").Trim();
                 tracked.MetadataRead = true;
+                tracked.Artwork = await ReadArtworkAsync(tracked, props.Thumbnail, ct).ConfigureAwait(false);
                 return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -583,6 +618,60 @@ public sealed class MediaSessionService : IMediaSessionService
                     await Task.Delay(_options.MetadataRetryDelay, ct).ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Fetch the thumbnail bytes. Bounded like every other media call; a
+    /// failure means no artwork, never a failed metadata read. The previous
+    /// artwork is reused when the bytes are unchanged, so a burst of
+    /// MediaPropertiesChanged events does not churn consumers.
+    /// </summary>
+    private async Task<Artwork?> ReadArtworkAsync(Tracked tracked, IRandomAccessStreamReference? reference, CancellationToken ct)
+    {
+        if (reference is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var stream = await reference.OpenReadAsync().AsTask().WaitAsync(_options.CallTimeout, ct).ConfigureAwait(false);
+            using var input = stream.AsStreamForRead();
+            using var buffer = new MemoryStream();
+            await input.CopyToAsync(buffer, ct).WaitAsync(_options.CallTimeout, ct).ConfigureAwait(false);
+            if (buffer.Length == 0)
+            {
+                return null;
+            }
+
+            var bytes = buffer.ToArray();
+            var key = Convert.ToHexString(SHA1.HashData(bytes));
+            if (tracked.Artwork?.Key == key)
+            {
+                return tracked.Artwork;
+            }
+
+            string? contentType = null;
+            try
+            {
+                contentType = stream.ContentType;
+            }
+            catch
+            {
+            }
+
+            Log($"artwork for {tracked.AppId}: {bytes.Length} bytes{(contentType is null ? "" : $", {contentType}")}");
+            return new Artwork(key, bytes, contentType);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log($"artwork read for {tracked.AppId} failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
         }
     }
 
@@ -668,21 +757,37 @@ public sealed class MediaSessionService : IMediaSessionService
 
         var snapshot = _resumeCorrector.Apply(previous, raw, now);
 
-        bool significant;
+        var significant = false;
         lock (_currentGate)
         {
-            if (snapshot == _current)
+            if (snapshot != _current)
             {
-                return;
+                significant = IsSignificantChange(_current, snapshot, now);
+                _current = snapshot;
             }
-
-            significant = IsSignificantChange(_current, snapshot, now);
-            _current = snapshot;
         }
 
         if (significant)
         {
             SnapshotChanged?.Invoke(snapshot);
+        }
+
+        // Artwork can change while the snapshot does not (the thumbnail
+        // usually arrives a moment after the text), so it is tracked apart.
+        var artwork = snapshot.State == PlaybackState.None ? null : _chosen?.Artwork;
+        bool artworkChanged;
+        lock (_currentGate)
+        {
+            artworkChanged = artwork?.Key != _currentArtwork?.Key;
+            if (artworkChanged)
+            {
+                _currentArtwork = artwork;
+            }
+        }
+
+        if (artworkChanged)
+        {
+            ArtworkChanged?.Invoke(artwork);
         }
     }
 
@@ -771,6 +876,7 @@ public sealed class MediaSessionService : IMediaSessionService
         public string AlbumTitle = "";
         public bool MetadataRead;
         public bool Detached;
+        public Artwork? Artwork;
         public TypedEventHandler<Session, PlaybackInfoChangedEventArgs>? PlaybackHandler;
         public TypedEventHandler<Session, MediaPropertiesChangedEventArgs>? MediaHandler;
         public TypedEventHandler<Session, TimelinePropertiesChangedEventArgs>? TimelineHandler;
@@ -800,4 +906,6 @@ public sealed class MediaSessionService : IMediaSessionService
     private sealed record TimelineChanged(Tracked Source) : Message;
 
     private sealed record Command(CommandKind Kind, TaskCompletionSource<bool> Result) : Message;
+
+    private sealed record SetPreferred(string? AppId) : Message;
 }

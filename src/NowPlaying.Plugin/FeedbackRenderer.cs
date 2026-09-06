@@ -29,14 +29,17 @@ public static class FeedbackRenderer
     /// <summary>The bar's layout range is 0..1000.</summary>
     public const int BarRange = 1000;
 
-    public static FeedbackFrame Render(NowPlayingSnapshot snapshot, DateTimeOffset now)
+    /// <param name="snapshot">What is playing.</param>
+    /// <param name="now">Wall clock, for position extrapolation.</param>
+    /// <param name="iconOverride">A pixmap value (path or data URI) to use instead of the plain state icon, e.g. rendered album art.</param>
+    public static FeedbackFrame Render(NowPlayingSnapshot snapshot, DateTimeOffset now, string? iconOverride = null)
     {
         if (snapshot.State == PlaybackState.None)
         {
             return new FeedbackFrame(null, NoMediaText, "", false, 0, "", "");
         }
 
-        var icon = snapshot.State is PlaybackState.Playing or PlaybackState.Changing ? PlayIcon : PauseIcon;
+        var icon = iconOverride ?? (snapshot.State is PlaybackState.Playing or PlaybackState.Changing ? PlayIcon : PauseIcon);
 
         // The artist takes the narrow row beside the icon and the title the
         // full-width row below it: the title is the line that needs the room.
