@@ -492,9 +492,11 @@ speaks DDC/CI over the display cable. The same route Twinkle Tray and
 Monitorian use; no library.
 
 Measured 2026-09-06 on the Odyssey G95NC over NVIDIA DisplayPort: DDC/CI
-answers, the range is 0..50 (not 0..100), a read takes 65 to 75 ms, the
-capabilities string takes 1.1 s, and a write of +1 unit is reflected on the
-next read.
+answers, the range is 0..50, a read takes 65 to 75 ms, the capabilities
+string takes 1.1 s, and a write of +1 unit is reflected on the next read.
+Most monitors report 0..100, but 0..50, 0..255, and 1..100 all exist, which
+is why the API returns a range with every read and the plugin works in
+percent.
 
 `MonitorConfiguration` and `DisplayBrightnessService` in `NowPlaying.Device`:
 
@@ -508,14 +510,31 @@ next read.
   worker applies only the most recent requested level; a fast spin costs one
   or two writes, not a queue. The strip shows the requested level at once.
 - **No notifications from the monitor.** A 30 s re-read adopts changes made on
-  the monitor's menu, skipped while a write is pending. A failed read or write
-  re-enumerates, which covers a monitor that slept or was unplugged. Wake
-  triggers a re-enumeration too.
+  the monitor's menu. It is skipped while a write is pending and for 5 s after
+  any write, because the G95NC refused reads for a couple of seconds after a
+  write and once handed back the old value. Wake triggers a re-enumeration.
+- **DDC/CI fails transiently, and the service is patient about it.** Two
+  failures measured 2026-09-06 with real error codes: "no device on the I2C
+  bus has the specified address" (the monitor not acknowledging, right after
+  another transaction) and "the operating system asynchronously destroyed the
+  monitor handle" (a display state change). Every read and write gets five
+  attempts with a growing pause (about a second in all); a failure after that
+  schedules a re-bind after 2 s, doubling to 30 s while failures continue,
+  rather than hammering the bus. Re-binding enumerates the new handles before
+  releasing the old ones, because destroying a handle and reopening the same
+  monitor at once is exactly the sequence that fails. In an eight-run stress
+  test, two first binds failed and both recovered on the 2 s re-bind.
 - **Dim toggle** goes to the monitor's minimum (0%), which on a monitor is a
   dim backlight rather than black; un-dimming from a level of 0 restores to
   30%. Adjusting while dimmed un-dims.
-- **Primary only.** The primary display is chosen; a monitor that does not
-  answer DDC/CI shows "No DDC/CI monitor" and every command alerts.
+- **More than one monitor.** Every monitor that answers DDC/CI is kept; the
+  primary is selected first, or the remembered one from global settings
+  (`displayMonitor`). The top row shows "Name 1/2" when there is a choice.
+  The press can be set to "next monitor" instead of dim, and a long touch
+  always cycles. A monitor that does not answer DDC/CI is dropped from the
+  list; with none, the strip shows "No DDC/CI monitor" and every command
+  alerts. Cycling is unit tested but not yet tried on real hardware; this
+  machine has one monitor.
 
 Known limits to test: HDR mode locks brightness on many monitors, some ship
 with DDC/CI off in their menu, and USB-C docks and KVMs can drop it.
@@ -675,8 +694,8 @@ Display brightness dial:
 | Event | Behaviour |
 | --- | --- |
 | `dialRotate` | Level moves by `ticks` times the step (default 2%); the strip updates at once and the worker writes the latest value to the monitor. Adjusting while dimmed un-dims. Rotation while pressed is ignored. |
-| `dialDown` | Toggle between the monitor's minimum and the remembered level. `dialUp` ignored. |
-| `touchTap` | Short tap toggles; a hold is ignored. |
+| `dialDown` | Per setting: toggle between the monitor's minimum and the remembered level (default), or select the next monitor. `dialUp` ignored. |
+| `touchTap` | Short tap does what the press does; a hold always selects the next monitor. With one monitor, "next" shows the alert. |
 
 Key action:
 

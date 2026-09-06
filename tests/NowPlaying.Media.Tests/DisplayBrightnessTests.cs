@@ -55,6 +55,21 @@ public class DisplayBrightnessTests
     }
 
     [Fact]
+    public void TheMonitorLabelShowsThePositionOnlyWhenThereIsAChoice()
+    {
+        Assert.Equal("Odyssey G95NC", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 1)));
+        Assert.Equal("Odyssey G95NC  1/2", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("Odyssey G95NC", 62, false, true, 0, 2)));
+        Assert.Equal("DELL U2723QE  2/2", DisplayBrightnessRenderer.MonitorLabel(new DisplayBrightnessSnapshot("DELL U2723QE", 40, false, true, 1, 2)));
+    }
+
+    [Fact]
+    public void NextMonitorIsRefusedWithOneMonitorOrBeforeBinding()
+    {
+        using var service = new DisplayBrightnessService();
+        Assert.False(service.NextMonitor(), "nothing is bound yet");
+    }
+
+    [Fact]
     public void TheMonitorTilesRenderAndDiffer()
     {
         var on = ArtRenderer.RenderMonitorTile(dimmed: false);

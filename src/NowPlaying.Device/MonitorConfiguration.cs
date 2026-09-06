@@ -87,24 +87,57 @@ public static class MonitorConfiguration
         }
     }
 
-    /// <summary>Current brightness and the monitor's own range. Throws when the monitor does not answer.</summary>
+    /// <summary>
+    /// DDC/CI transactions fail transiently, especially right after another
+    /// one on the same bus (seen on the Odyssey G95NC: a read that had just
+    /// succeeded failed when repeated within milliseconds). Every call gets a
+    /// few attempts with a pause between them before it counts as a failure.
+    /// </summary>
+    public const int Attempts = 5;
+
+    /// <summary>Backoff between attempts: 100, 200, 300, 400 ms, about a second in all.</summary>
+    private static TimeSpan RetryDelay(int attempt) => TimeSpan.FromMilliseconds(100 * attempt);
+
+    /// <summary>Current brightness and the monitor's own range. Throws when the monitor does not answer after <see cref="Attempts"/> tries.</summary>
     public static (uint Min, uint Current, uint Max) ReadBrightness(IntPtr handle)
     {
-        if (!GetMonitorBrightness(handle, out var min, out var current, out var max))
+        var error = 0;
+        for (var attempt = 1; attempt <= Attempts; attempt++)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetMonitorBrightness");
+            if (GetMonitorBrightness(handle, out var min, out var current, out var max))
+            {
+                return (min, current, max);
+            }
+
+            error = Marshal.GetLastWin32Error();
+            if (attempt < Attempts)
+            {
+                Thread.Sleep(RetryDelay(attempt));
+            }
         }
 
-        return (min, current, max);
+        throw new Win32Exception(error, $"GetMonitorBrightness failed {Attempts} times: 0x{error:x8} {new Win32Exception(error).Message}");
     }
 
-    /// <summary>Set brightness in the monitor's own units. Throws when the monitor does not answer.</summary>
+    /// <summary>Set brightness in the monitor's own units. Throws when the monitor does not answer after <see cref="Attempts"/> tries.</summary>
     public static void WriteBrightness(IntPtr handle, uint value)
     {
-        if (!SetMonitorBrightness(handle, value))
+        var error = 0;
+        for (var attempt = 1; attempt <= Attempts; attempt++)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "SetMonitorBrightness");
+            if (SetMonitorBrightness(handle, value))
+            {
+                return;
+            }
+
+            error = Marshal.GetLastWin32Error();
+            if (attempt < Attempts)
+            {
+                Thread.Sleep(RetryDelay(attempt));
+            }
         }
+
+        throw new Win32Exception(error, $"SetMonitorBrightness failed {Attempts} times: 0x{error:x8} {new Win32Exception(error).Message}");
     }
 
     /// <summary>Percent 0..100 from a value in the monitor's range.</summary>

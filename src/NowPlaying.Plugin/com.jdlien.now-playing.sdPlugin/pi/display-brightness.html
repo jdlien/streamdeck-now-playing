@@ -15,8 +15,15 @@
     </sdpi-select>
   </sdpi-item>
 
+  <sdpi-item label="Press / tap">
+    <sdpi-select setting="pressAction" default="dim">
+      <option value="dim">Dim and restore</option>
+      <option value="next">Next monitor</option>
+    </sdpi-select>
+  </sdpi-item>
+
   <sdpi-item label="">
-    <small>Controls the primary monitor's brightness over DDC/CI, the same channel the monitor's own menu uses. Turn to adjust; press the dial or tap the strip to dim to the monitor's minimum and back. If nothing happens, enable DDC/CI in the monitor's menu; HDR mode may also lock brightness on some monitors.</small>
+    <small>Controls a monitor's brightness over DDC/CI, the same channel the monitor's own menu uses. Turn to adjust. Holding the touch strip always moves to the next monitor that answers; the chosen monitor is remembered. If nothing happens, enable DDC/CI in the monitor's menu; HDR mode may also lock brightness on some monitors.</small>
   </sdpi-item>
 </body>
 </html>

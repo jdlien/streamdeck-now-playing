@@ -14,6 +14,7 @@ internal static class GlobalSettingsStore
     private static JObject _latest = new();
 
     public const string BrightnessKey = "brightness";
+    public const string DisplayMonitorKey = "displayMonitor";
 
     /// <summary>Record what the app sent and fan it out to the hubs that care.</summary>
     public static void Apply(JObject? settings)
@@ -25,6 +26,7 @@ internal static class GlobalSettingsStore
 
         MediaHub.SetPreferredAppId(PropertyInspectorBridge.PreferredAppFrom(settings));
         BrightnessHub.LoadSavedLevel(settings?[BrightnessKey]?.Type == JTokenType.Integer ? (int?)settings[BrightnessKey]!.Value<int>() : null);
+        DisplayBrightnessHub.SetPreferredMonitor(SettingsReader.GetString(settings, DisplayMonitorKey, ""));
     }
 
     /// <summary>Write one key back, merged into the latest copy, without triggering didReceiveGlobalSettings.</summary>

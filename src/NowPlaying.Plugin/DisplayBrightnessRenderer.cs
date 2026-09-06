@@ -15,10 +15,14 @@ public static class DisplayBrightnessRenderer
         return new FeedbackFrame(
             iconValue,
             snapshot.Dimmed ? $"Dimmed  {snapshot.Level}%" : $"Brightness  {snapshot.Level}%",
-            snapshot.Name,
+            MonitorLabel(snapshot),
             true,
             snapshot.Effective * FeedbackRenderer.BarRange / 100,
             "0",
             "100");
     }
+
+    /// <summary>The monitor's name, with its position when more than one answers, so cycling is visible.</summary>
+    public static string MonitorLabel(DisplayBrightnessSnapshot snapshot) =>
+        snapshot.Count > 1 ? $"{snapshot.Name}  {snapshot.Index + 1}/{snapshot.Count}" : snapshot.Name;
 }

@@ -246,13 +246,28 @@ internal static class Program
             }
         };
         service.Start();
-        var bound = await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var bound = await done.Task.WaitAsync(TimeSpan.FromSeconds(12)); // a first bind can fail and re-bind after a backoff
         var delta = target - bound.Level;
+        if (delta == 0)
+        {
+            Console.WriteLine($"already at {target}%; nothing written");
+            return 0;
+        }
+
         Console.WriteLine($"adjusting by {delta:+#;-#;0} to {target}%");
         service.Adjust(delta);
-        await Task.Delay(1500);
-        var (_, after, _) = NowPlaying.Device.MonitorConfiguration.ReadBrightness(NowPlaying.Device.MonitorConfiguration.Enumerate().First(m => m.IsPrimary).Handle);
-        Console.WriteLine($"monitor now reports {after} units");
+        await Task.Delay(2500); // let the write land and the bus settle before reading back
+        var check = NowPlaying.Device.MonitorConfiguration.Enumerate();
+        try
+        {
+            var (_, after, _) = NowPlaying.Device.MonitorConfiguration.ReadBrightness(check.First(m => m.IsPrimary).Handle);
+            Console.WriteLine($"monitor now reports {after} units");
+        }
+        finally
+        {
+            NowPlaying.Device.MonitorConfiguration.Destroy(check);
+        }
+
         return 0;
     }
 
