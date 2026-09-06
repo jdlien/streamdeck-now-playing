@@ -33,6 +33,7 @@
     <PackageReference Include="StreamDeck-Tools" Version="7.0.0" />
     <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
     <ProjectReference Include="..\NowPlaying.Audio\NowPlaying.Audio.csproj" />
+    <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
   </ItemGroup>
 
 </Project>

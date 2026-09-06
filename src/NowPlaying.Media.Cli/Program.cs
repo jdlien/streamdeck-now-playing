@@ -33,11 +33,14 @@ internal static class Program
                 return await WatchAsync(asJson, ticks);
             case "volume":
                 return await VolumeAsync();
+            case "brightness":
+                return Brightness(args.Skip(1).FirstOrDefault(a => !a.StartsWith("--")));
             default:
-                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch|volume] [--json] [--ticks]");
+                Console.Error.WriteLine("usage: nowplaying-cli [probe|watch|volume|brightness <0-100>] [--json] [--ticks]");
                 Console.Error.WriteLine("  probe   list every Windows media session and exit");
                 Console.Error.WriteLine("  watch   print a line per snapshot change; reads next/prev/toggle/refresh/quit on stdin");
                 Console.Error.WriteLine("  volume  print the default output device's volume; reads up/down/mute/quit on stdin");
+                Console.Error.WriteLine("  brightness <0-100>  list Stream Deck + HID paths and set their screen brightness");
                 Console.Error.WriteLine("  --ticks in watch mode, also print the extrapolated position once a second while playing");
                 return 2;
         }
@@ -166,6 +169,33 @@ internal static class Program
         }
 
         return 0;
+    }
+
+    // -- brightness -------------------------------------------------------
+
+    private static int Brightness(string? percentText)
+    {
+        var paths = NowPlaying.Device.StreamDeckHid.FindDevicePaths();
+        Console.WriteLine($"Stream Deck + HID interfaces: {paths.Count}");
+        foreach (var path in paths)
+        {
+            Console.WriteLine($"  {path}");
+        }
+
+        if (percentText is null)
+        {
+            return paths.Count > 0 ? 0 : 1;
+        }
+
+        if (!int.TryParse(percentText, out var percent) || percent < 0 || percent > 100)
+        {
+            Console.Error.WriteLine("brightness must be 0..100");
+            return 2;
+        }
+
+        var applied = NowPlaying.Device.StreamDeckHid.SetBrightnessAll(percent, message => Console.Error.WriteLine($"[hid] {message}"));
+        Console.WriteLine($"brightness {percent}% applied to {applied} device(s)");
+        return applied > 0 ? 0 : 1;
     }
 
     private static void PrintVolume(NowPlaying.Audio.VolumeSnapshot volume) =>

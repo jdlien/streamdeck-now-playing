@@ -51,6 +51,12 @@ Added 2026-09-06 for Marketplace eligibility and for decks without a dial:
   ends as the small labels. Turn to adjust (step size configurable), press or
   tap to mute. Follows the device Windows uses for playback and reflects
   changes made anywhere else, such as the keyboard or the tray.
+- **Brightness**, a fourth action for a dial, again in the same layout: a sun
+  tile, the deck model on the top row, "Brightness 60%" on the full-width
+  row, the bar as the level. Turn to adjust (step configurable, 5% default),
+  press or tap to switch the screen off and back on at the remembered level.
+  Talks to the hardware directly, because the plugin protocol has no
+  brightness command (see 5.10).
 
 ## 2. Verified environment
 
@@ -155,19 +161,21 @@ and paused:
 NowPlaying.slnx
   src/NowPlaying.Media/          class library: Windows media session wrapper
   src/NowPlaying.Audio/          class library: default output device volume over NAudio's WASAPI wrappers
-  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe, watch, volume
+  src/NowPlaying.Device/         class library: Stream Deck brightness over a HID feature report (plain Win32)
+  src/NowPlaying.Media.Cli/      console harness (nowplaying-cli): probe, watch, volume, brightness
   src/NowPlaying.Plugin/         Stream Deck plugin (StreamDeck-Tools); builds into the sdPlugin folder
     NowPlayingAction.cs          the dial action
     NowPlayingKeyAction.cs       the key action
     VolumeAction.cs              the volume dial; VolumeHub.cs, VolumeRenderer.cs alongside
+    BrightnessAction.cs          the brightness dial; BrightnessHub.cs, BrightnessRenderer.cs, GlobalSettingsStore.cs alongside
     FeedbackRenderer.cs          snapshot -> layout items, diffed (pure)
     ArtRenderer.cs               album art + glyph compositing with SkiaSharp (pure)
     MediaHub.cs                  the one shared media service
     PropertyInspectorBridge.cs   the "sessions" data source and the preferred-player global setting
     com.jdlien.now-playing.sdPlugin/
       manifest.json
-      layouts/now-playing.json, layouts/volume.json   same rectangles, different defaults
-      pi/dial.html, pi/key.html, pi/volume.html       property inspectors on sdpi-components v4 (local copy)
+      layouts/now-playing.json, volume.json, brightness.json   same rectangles, different defaults
+      pi/dial.html, key.html, volume.html, brightness.html     property inspectors on sdpi-components v4 (local copy)
       imgs/icons/                play.svg, pause.svg for the layout's pixmap item
       imgs/plugin/, imgs/actions/  placeholder PNG icons for the Stream Deck app
       bin/                       build output, git-ignored; manifest CodePath is bin/NowPlaying.exe
@@ -188,6 +196,8 @@ streamdeck restart com.jdlien.now-playing
 
 dotnet run --project src/NowPlaying.Media.Cli -- probe           # what Windows exposes right now; --json for machine output
 dotnet run --project src/NowPlaying.Media.Cli -- watch --ticks   # live snapshots; type next / prev / toggle / refresh / quit
+dotnet run --project src/NowPlaying.Media.Cli -- volume          # default output device; type up / down / mute / quit
+dotnet run --project src/NowPlaying.Media.Cli -- brightness 70   # list Stream Deck + HID paths and set their brightness
 ```
 
 Debug builds of the plugin land straight in the `.sdPlugin/bin/` folder, so
@@ -423,6 +433,45 @@ Measured 2026-09-06 through `nowplaying-cli volume`: bound to the display's
 audio at 84%, stepped to 86 and back, muted and unmuted, each reflected within
 the same second.
 
+### 5.10 Stream Deck brightness
+
+The plugin protocol has no brightness command (the full command list was
+checked on 2026-09-06: setTitle, setImage, setFeedback, and friends, nothing
+for the device). The app sets brightness by talking USB HID to the device, so
+the plugin does the same, with the report every current Stream Deck uses:
+a 32-byte feature report `03 08 <percent>`, confirmed against
+python-elgato-streamdeck and a standalone brightness tool.
+
+`StreamDeckHid` in `NowPlaying.Device`, plain Win32:
+
+- Enumerates HID interface paths through the PnP manager
+  (`CM_Get_Device_Interface_ListW`), which reads the device tree without
+  opening anything. HID libraries enumerate by opening every device, which is
+  what wedged a UPS in `../ak820-pro`, so none is used.
+- Filters paths for `vid_0fd9&pid_0084` (Stream Deck +), opens each with
+  shared read/write, sends the report with `HidD_SetFeature`, closes. Verified
+  2026-09-06 with the Stream Deck app running: one interface found, 70%
+  applied.
+- Applies to every Stream Deck + present; with two decks both follow the dial.
+
+What the hardware cannot do, and how the plugin copes:
+
+- **The device does not report brightness.** The level shown is the last one
+  the plugin set. It is persisted in global settings (`brightness`) so it
+  survives restarts and is shared by every instance; the off toggle is per
+  process. A fresh install shows 60% and applies it on the first appear.
+- **The app is a second master.** Its own brightness slider, its screen
+  saver, and its dimming after sleep all set the hardware behind the plugin's
+  back, and the plugin cannot see that. It re-applies its level on wake and on
+  device reconnect, which covers the common cases; a mismatch after the app's
+  own slider corrects itself on the next dial turn.
+- **Adjusting while off turns it back on** at the new level, as the volume dial
+  unmutes. Toggling on from a level of 0 restores to 40% rather than to black.
+
+Marketplace note: the guidelines say nothing about plugins reaching the
+hardware directly. It is a review risk to flag in the submission notes, and a
+reason to keep this action easy to leave out of the listing if Elgato objects.
+
 ## 6. Display design
 
 ### 6.1 Layout
@@ -564,6 +613,14 @@ Volume dial:
 | `dialRotate` | Level moves by `ticks` times the step (default 2%), so a fast spin travels further. Adjusting while muted unmutes, as the keyboard keys do. Rotation while pressed is ignored. |
 | `dialDown` | Toggle mute. `dialUp` ignored. |
 | `touchTap` | Short tap toggles mute; a hold is ignored. |
+
+Brightness dial:
+
+| Event | Behaviour |
+| --- | --- |
+| `dialRotate` | Level moves by `ticks` times the step (default 5%), applied to the hardware at once and saved to global settings. Adjusting while off turns the screen back on. Rotation while pressed is ignored. |
+| `dialDown` | Toggle the screen off (0%) or back to the remembered level. `dialUp` ignored. |
+| `touchTap` | Short tap toggles; a hold is ignored. |
 
 Key action:
 
@@ -740,7 +797,7 @@ Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
   by email. Plugins needing hardware also need a short video. Free is fine;
   name and monetization cannot change afterwards. No code signing requirement
   appears in the docs.
-- Guideline items this plugin now meets: three actions (they ask for 2 to 30),
+- Guideline items this plugin now meets: four actions (they ask for 2 to 30),
   configurable actions with a property inspector, monochrome white action and
   category icons, `showAlert` on failure, layout updates well under 10 per
   second, a UUID with author and plugin name that must never change.

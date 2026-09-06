@@ -118,6 +118,47 @@ public static class ArtRenderer
         return Encode(surface);
     }
 
+    /// <summary>The brightness dial's tile: a sun with eight rays, dimmed when the screen is toggled off.</summary>
+    public static byte[] RenderBrightnessTile(bool off, int size = DialTileSize)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+
+        var rect = new SKRect(0, 0, size, size);
+        var corner = size * 0.14f;
+        using var tile = new SKPaint { Color = new SKColor(0x2c, 0x2c, 0x32), IsAntialias = true };
+        canvas.DrawRoundRect(rect, corner, corner, tile);
+
+        var color = off ? DimGlyph : SKColors.White;
+        var cx = size / 2f;
+        var cy = size / 2f;
+        var half = size * 0.31f;
+        using var fill = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Fill };
+        canvas.DrawCircle(cx, cy, half * 0.42f, fill);
+
+        using var stroke = new SKPaint
+        {
+            Color = color,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = Math.Max(1.5f, half * 0.16f),
+            StrokeCap = SKStrokeCap.Round,
+        };
+        for (var i = 0; i < 8; i++)
+        {
+            var angle = i * MathF.PI / 4f;
+            var inner = half * 0.66f;
+            var outer = half * 1.0f;
+            canvas.DrawLine(
+                cx + MathF.Cos(angle) * inner, cy + MathF.Sin(angle) * inner,
+                cx + MathF.Cos(angle) * outer, cy + MathF.Sin(angle) * outer,
+                stroke);
+        }
+
+        return Encode(surface);
+    }
+
     /// <summary>Speaker body and cone with two sound arcs, or a cross when muted, fitted into a box of side <paramref name="box"/>.</summary>
     private static void DrawSpeaker(SKCanvas canvas, float cx, float cy, float box, bool muted, SKColor color)
     {

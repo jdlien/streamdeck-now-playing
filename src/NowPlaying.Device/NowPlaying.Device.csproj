@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Direct control of the Stream Deck hardware for what the plugin protocol
+    does not expose: today, brightness. Plain Win32 (cfgmgr32 + hid.dll), no
+    HID library, because HID library enumeration opens every device on the
+    machine and the PnP manager can list interface paths without opening any.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Device</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NowPlaying.Media.Tests" />
+  </ItemGroup>
+
+</Project>
