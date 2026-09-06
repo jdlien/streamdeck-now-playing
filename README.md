@@ -242,9 +242,11 @@ record NowPlayingSnapshot(
     bool CanNext, bool CanPrevious, bool CanToggle);
 ```
 
-Artist normalisation: Artist, else AlbumArtist, else AlbumTitle, else empty.
-Title: Title, else empty. Missing title and artist together with a live session
-shows the app name derived from the app id.
+Artist normalisation: Artist, else AlbumArtist, else AlbumTitle, else empty;
+then, when the player reports no album of its own, anything after the first
+" — " is dropped, because that is how Apple Music packs the album into the
+artist field. Title: Title, else empty. Missing title and artist together with
+a live session shows the app name derived from the app id.
 
 ### 5.3 Session selection
 
@@ -360,7 +362,7 @@ seek, track change, or state change. So:
 
 | Player | Behaviour |
 | --- | --- |
-| Apple Music | Artist field is `Artist — Album` (em dash) with AlbumTitle empty. Display verbatim in v1; if it needs to be shorter, prefer the part before the em dash. Registers an `Opened` session at launch that Windows calls current. Timeline refreshes about every second while playing and freezes on pause. |
+| Apple Music | Artist field is `Artist — Album` (em dash) with AlbumTitle empty. The album part is dropped for display (decided 2026-09-06 after seeing it truncate on the strip); the rule only fires when no separate album is reported. Registers an `Opened` session at launch that Windows calls current. Timeline refreshes about every second while playing and freezes on pause. |
 | foobar2000 | v2 registers a session with stock components; no plug-in needed. Title, artist, and thumbnail are correct; AlbumTitle is empty. Timeline is all zeros with a zero `LastUpdatedTime` even while playing, so the bar stays hidden. The control flags report next, previous, and toggle as enabled, so commands should work; confirm in milestone 1. The only known route to a position is its `foo_beefweb` HTTP API, which would be per-app code and is out of scope. |
 | Chrome / Edge | App id is plain `Chrome`. Measured 2026-09-06 with YouTube: Title is the video title, Artist is the channel name, and the timeline is complete (position, duration, fresh `LastUpdatedTime`), so the bar and times work. Position depends on the site calling `setPositionState`; YouTube does, other sites may not. |
 
@@ -673,11 +675,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Check-MediaSessions.ps
 
 ## 12. Open questions
 
-1. Apple Music's `Artist — Album` field: show verbatim (v1 default) or split
-   at the em dash and drop the album?
-2. foobar2000 progress: accept no bar (v1 default), or add per-app position
+1. foobar2000 progress: accept no bar (v1 default), or add per-app position
    reads through its `foo_beefweb` HTTP API later?
-3. Later candidates, not planned: long-touch or press-and-rotate mapped to
+2. Later candidates, not planned: long-touch or press-and-rotate mapped to
    seek, a luminance-aware glyph colour on the art, a proper plugin icon and
    Marketplace listing assets (section 13).
 

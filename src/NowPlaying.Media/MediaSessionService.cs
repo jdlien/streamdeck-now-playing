@@ -715,9 +715,7 @@ public sealed class MediaSessionService : IMediaSessionService
         }
 
         var timeline = ReadTimeline(tracked);
-        var artist = tracked.Artist.Length > 0 ? tracked.Artist
-            : tracked.AlbumArtist.Length > 0 ? tracked.AlbumArtist
-            : tracked.AlbumTitle;
+        var artist = MetadataNormalizer.Artist(tracked.Artist, tracked.AlbumArtist, tracked.AlbumTitle);
 
         return new NowPlayingSnapshot(
             tracked.AppId,
