@@ -11,7 +11,7 @@ namespace NowPlaying.Plugin;
 /// implementation here", and the hubs already treat that as "no device"
 /// rather than throwing.
 ///
-/// Still to land: media in M6. Stream Deck
+/// Stream Deck
 /// brightness stays null permanently, because the Stream Deck app seizes the
 /// HID device on macOS (macos-port-plan S2).
 /// </summary>
@@ -27,7 +27,8 @@ internal static class PlatformServices
     /// </summary>
     public static bool SupportsStreamDeckBrightness => false;
 
-    public static IMediaSessionService? CreateMedia(MediaSessionServiceOptions options) => null;
+    public static IMediaSessionService? CreateMedia(MediaSessionServiceOptions options) =>
+        OperatingSystem.IsMacOS() ? new MacMediaSessionService(options) : null;
 
     public static IVolumeService? CreateVolume(Action<string>? log) =>
         OperatingSystem.IsMacOS() ? new MacVolumeService(log) : null;

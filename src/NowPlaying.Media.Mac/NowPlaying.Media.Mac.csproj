@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The macOS implementation of IMediaSessionService.
+
+    macOS stopped answering MediaRemote for ordinary processes in 15.4, so the
+    metadata comes from a helper dylib hosted in /usr/bin/perl (see
+    native/nowplaying-mediaremote.m). This project compiles that helper and
+    copies it next to the managed output, where the packaging script signs it
+    along with everything else.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Media</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NativeHelper>$(MSBuildProjectDirectory)/native/nowplaying-mediaremote.m</NativeHelper>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
+  </ItemGroup>
+
+  <!--
+    Built from source rather than committed as a binary, so it can be read and
+    audited with the rest of the project. Only on macOS: everywhere else the
+    helper is meaningless and the managed code never looks for it.
+
+    Copied explicitly rather than through a None item, because item groups are
+    evaluated before any target runs and the dylib does not exist yet at that
+    point.
+  -->
+  <PropertyGroup>
+    <MediaRemoteHelperDylib>$(IntermediateOutputPath)nowplaying-mediaremote.dylib</MediaRemoteHelperDylib>
+    <BuildHelper Condition="'$([MSBuild]::IsOSPlatform(OSX))' == 'true'">true</BuildHelper>
+  </PropertyGroup>
+
+  <Target Name="BuildMediaRemoteHelper" BeforeTargets="Build" Condition="'$(BuildHelper)' == 'true'"
+          Inputs="$(NativeHelper)" Outputs="$(MediaRemoteHelperDylib)">
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Exec Command="clang -dynamiclib -fobjc-arc -O2 -framework Foundation -o &quot;$(MediaRemoteHelperDylib)&quot; &quot;$(NativeHelper)&quot;" />
+  </Target>
+
+  <!--
+    Registered as a None item inside a target rather than at the top level,
+    because the file does not exist during item evaluation. AssignTargetPaths is
+    early enough for GetCopyToOutputDirectoryItems to see it, which is what makes
+    the plugin project copy it too instead of leaving it here.
+  -->
+  <Target Name="IncludeMediaRemoteHelper" BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="BuildMediaRemoteHelper" Condition="'$(BuildHelper)' == 'true'">
+    <ItemGroup>
+      <None Include="$(MediaRemoteHelperDylib)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>nowplaying-mediaremote.dylib</Link>
+        <Visible>false</Visible>
+      </None>
+    </ItemGroup>
+  </Target>
+
+</Project>

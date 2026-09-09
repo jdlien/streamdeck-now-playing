@@ -1,10 +1,20 @@
 # Stream Deck Now Playing
 
-Design and implementation plan for a Windows plugin for the Elgato Stream Deck +.
-It shows the current Windows media session (title, artist, play state, progress)
-on one dial's touch-strip segment and controls playback with that dial.
+Design and implementation plan for an Elgato Stream Deck + plugin, on Windows
+and macOS. It shows the current media session (title, artist, play state,
+progress) on one dial's touch-strip segment and controls playback with that
+dial.
 
-Status (end of 2026-09-06): working and in daily use on the hardware. Five
+Sections 1 to 13 describe the Windows build, which came first and remains the
+reference. Section 14 covers macOS: what is the same, what had to be built
+differently, and the one action that cannot exist there.
+
+Status (macOS, 2026-09-09): Volume, Display Brightness and Now Playing all
+working on a Stream Deck + on macOS 26.5.2, Apple Silicon. Signed and
+notarized. SD Brightness cannot ship there; see section 14. 169 unit tests,
+up from 144, and they now run on both platforms.
+
+Status (Windows, end of 2026-09-06): working and in daily use on the hardware. Five
 actions: Now Playing (dial), Now Playing Key, Volume, SD Brightness, and
 Display Brightness, all in one shared touch-strip layout, verified on a
 Stream Deck + with Apple Music, foobar2000, YouTube in Chrome, two DDC/CI
@@ -917,6 +927,116 @@ Checked 2026-09-06 against Elgato's plugin guidelines and Maker Console docs:
   "accurately portray" anything), gallery screenshots, listing copy, and a
   name check against the existing "Current Media (Now Playing)" plugin;
   something like "Now Playing Dial" avoids the collision.
+
+## 14. macOS
+
+Ported 2026-09-09. The full record, including what was measured and what was
+tried and rejected, is in [docs/macos-port-plan.md](docs/macos-port-plan.md).
+
+### 14.1 What is shared
+
+Everything above the platform line. The snapshot model, session ranking,
+timeline maths, the renderers, the layouts and the property inspectors are one
+implementation on a platform-neutral target, and the tests that cover them run
+on both. Only the services behind `IMediaSessionService`, `IVolumeService`,
+`IDisplayBrightnessService` and `IStreamDeckBrightness` differ.
+
+StreamDeck-Tools 7.0 made this possible: it ships a cross-platform SkiaSharp
+surface, and this plugin already drew with Skia. Building the Windows-targeted
+projects on macOS needs `EnableWindowsTargeting`, which
+`Directory.Build.props` sets off Windows, so one checkout compiles both halves.
+
+### 14.2 Now Playing
+
+`Windows.Media.Control` has no macOS equivalent that a plugin may use. macOS
+15.4 stopped answering `MRMediaRemoteGetNowPlayingInfo` for ordinary processes:
+the callback fires and the dictionary is empty. Measured again on 26.5.2, it
+still does.
+
+It answers an Apple platform binary. So the metadata comes from a small
+Objective-C helper (`src/NowPlaying.Media.Mac/native/`) loaded into
+`/usr/bin/perl`, which the plugin supervises and talks line-JSON to. That
+covers every player without per-app work and keeps the design event-driven,
+because MediaRemote pushes change notifications.
+
+One app is exempt. With Music.app owning the session, the calls that name the
+owning app and report playing state both answer, but the metadata call never
+calls back at all — measured out to thirty seconds. So the service is a router:
+it reads the owning bundle id first, sends Music to AppleScript and everything
+else to MediaRemote. Every MediaRemote call is bounded, and if the helper is
+lost entirely the service falls back to Music rather than showing nothing.
+
+Two consequences worth knowing. Apple events need Automation permission, which
+is attributed to the Stream Deck app rather than to this plugin, and the prompt
+may not appear on its own for a background-launched process. And this reports
+the session macOS has selected rather than every session, so which player wins
+is the system's choice; a playing session is held briefly against a switch to a
+merely paused one.
+
+### 14.3 Volume
+
+CoreAudio, all public API. The difference from WASAPI is that a software volume
+is not guaranteed: an audio interface whose gain is a physical knob exposes
+none at all, and macOS greys out its own slider for it. `VolumeSnapshot`
+therefore carries `CanSetVolume` and `CanMute` separately, and the dial says
+"Hardware volume" and refuses input instead of pretending. Switching the
+default output device to one that does expose volume makes the dial live again
+without a restart.
+
+### 14.4 Display brightness
+
+Two protocols, because no display answers both. Apple panels answer
+`DisplayServices`; everything else answers DDC/CI over `IOAVService`. A backend
+is chosen per display by probing, and a display that answers neither is
+reported unavailable rather than guessed at.
+
+Pairing a display with its DDC channel has no documented route. CoreGraphics
+knows a display's EDID identity but not its IOKit service; the AV service nodes
+know only a framebuffer index. The join is the `IOMobileFramebufferShim` node
+between them, which has both, and is also where the real display names come
+from.
+
+Every DDC reply is validated before it is believed. A successful transaction
+can still return noise: a Studio Display's bus returned a frame that parses
+naively as "brightness 158". The recorded frame is a test case.
+
+The Windows build's periodic DDC read stops monitors from ever staying asleep.
+That is not inherited: backends declare whether a read costs a bus
+transaction, DDC displays are never polled while idle, and every transaction is
+gated on `CGDisplayIsAsleep`. Apple displays answer locally, so they are still
+polled and additionally report brightness changed by anything else, which the
+strip follows.
+
+### 14.5 SD Brightness cannot ship on macOS
+
+The Stream Deck app opens the HID device with `kIOHIDOptionsTypeSeizeDevice`,
+so no other process can open it. Proved by elimination: with the app quit, this
+plugin's own code opens the device and sets brightness at 15%, 100% and 60%
+without complaint. On Windows both openers permit sharing and coexist.
+
+The action is hidden by a per-action `OS` key rather than deleted, and the deck
+is kept out of the Display Brightness dial's cycle, so no macOS dial offers a
+target that does nothing. Elgato's built-in Brightness action covers the need
+natively. [docs/elgato-feature-request.md](docs/elgato-feature-request.md) is a
+drafted request asking them to open the device without seizing it.
+
+### 14.6 Packaging
+
+`build/package-macos.sh` publishes, signs, notarizes and packs;
+`build/notarize-setup.sh` stores the credential once. Two traps, both of which
+present as `Process stopped (terminated)` with no plugin log and no crash
+report:
+
+- **A quarantine attribute anywhere in the payload is fatal.** macOS blocks the
+  unnotarized binary and the app only reports a terminated process.
+- **Framework-dependent publishes do not work.** They run from a terminal but
+  not when the Stream Deck app spawns them, because that environment does not
+  lead the apphost to a shared runtime. Self-contained is required, which also
+  matches decision 5: end users do not need .NET installed.
+
+Notarization is accepted and Gatekeeper reports `source=Notarized Developer ID`.
+The ticket is not stapled, because a bare executable cannot be; Gatekeeper
+checks online instead.
 
 ## License
 

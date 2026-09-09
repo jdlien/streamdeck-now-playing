@@ -4,7 +4,12 @@ Companion to the README, which stays the Windows design document. This file
 covers only what changes to run on macOS. Where this file says "README §5.3" it
 means that section of the main README.
 
-Status: **revision 4 — spikes done, M0–M2 implemented 2026-09-09.**
+Status: **revision 5 — the port is complete, 2026-09-09.** All milestones done
+and confirmed on the hardware. What follows is the record of how it was
+established, kept because the private-API findings need re-checking after every
+macOS release.
+
+Previously: **revision 4 — spikes done, M0–M2 implemented 2026-09-09.**
 The plugin now builds, loads and runs on macOS; volume works on devices that
 have a software volume. §0 has the spike results, §10 the external review that
 shaped revision 2.
@@ -18,8 +23,8 @@ shaped revision 2.
 | M2 Volume | **Done, awaiting hardware test.** Verified end to end against CoreAudio. |
 | M3 SD Brightness | **Cut** (S2), and the removal done: hidden by manifest, kept out of the Display Brightness cycle, and dropped from the property inspector on macOS. |
 | M4 Display Brightness | **Done, awaiting hardware test.** Both backends verified live on all three displays. |
-| M5 Packaging | **Mostly done.** S4 run: signed, hardened, self-contained builds launch correctly. `build/package-macos.sh` publishes, signs and packs. Notarization needs a stored credential (one command, below). |
-| M6 Now Playing | Not started. Shape settled by S1. |
+| M5 Packaging | **Done.** Notarization accepted; Gatekeeper reports `source=Notarized Developer ID`. S4 run: signed, hardened, self-contained builds launch correctly. `build/package-macos.sh` publishes, signs and packs. Notarization needs a stored credential (one command, below). |
+| M6 Now Playing | **Done and confirmed on the hardware.** MediaRemote via an Apple-signed host for breadth, AppleScript for Music.app, routed by owning bundle id. |
 
 Two faults worth remembering, both found by testing rather than review:
 

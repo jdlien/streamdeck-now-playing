@@ -9,6 +9,7 @@
     <Project Path="src/NowPlaying.Media.Cli/NowPlaying.Media.Cli.csproj" />
     <Project Path="src/NowPlaying.Media/NowPlaying.Media.csproj" />
     <Project Path="src/NowPlaying.Media.Windows/NowPlaying.Media.Windows.csproj" />
+    <Project Path="src/NowPlaying.Media.Mac/NowPlaying.Media.Mac.csproj" />
     <Project Path="src/NowPlaying.Plugin/NowPlaying.Plugin.csproj" />
   </Folder>
   <Folder Name="/tests/">

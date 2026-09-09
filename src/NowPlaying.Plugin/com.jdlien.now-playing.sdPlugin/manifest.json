@@ -31,12 +31,6 @@
       "UUID": "com.jdlien.now-playing.dial",
       "Name": "Now Playing",
       "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause.",
-      "OS": [
-        {
-          "Platform": "windows",
-          "MinimumVersion": "10"
-        }
-      ],
       "Icon": "imgs/actions/now-playing/icon",
       "Controllers": [
         "Encoder"
@@ -62,12 +56,6 @@
       "UUID": "com.jdlien.now-playing.key",
       "Name": "Now Playing Key",
       "Tooltip": "Album art, title, and play state on a key. Press for play/pause, hold for next track; both configurable.",
-      "OS": [
-        {
-          "Platform": "windows",
-          "MinimumVersion": "10"
-        }
-      ],
       "Icon": "imgs/actions/now-playing-key/icon",
       "Controllers": [
         "Keypad"
