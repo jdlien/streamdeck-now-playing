@@ -12,11 +12,22 @@ public static class VolumeRenderer
 {
     public const string NoDeviceText = "No audio device";
 
+    /// <summary>Shown when the device plays audio but has no software volume, so the dial cannot do anything.</summary>
+    public const string HardwareOnlyText = "Hardware volume";
+
     public static FeedbackFrame Render(VolumeSnapshot volume, string iconValue)
     {
         if (!volume.HasDevice)
         {
             return new FeedbackFrame(iconValue, NoDeviceText, "", false, 0, "", "");
+        }
+
+        // A device with a physical gain knob and no software volume: name it,
+        // say why the dial is inert, and hide the bar rather than showing a
+        // level that cannot move.
+        if (!volume.CanSetVolume)
+        {
+            return new FeedbackFrame(iconValue, HardwareOnlyText, volume.DeviceName, false, 0, "", "");
         }
 
         var percent = volume.Percent;

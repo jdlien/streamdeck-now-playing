@@ -55,4 +55,34 @@ public class VolumeRendererTests
         Assert.Equal(0, bitmap.GetPixel(0, 0).Alpha);
         Assert.True(bitmap.GetPixel(ArtRenderer.DialTileSize / 2, 2).Alpha > 200, "the tile background is opaque");
     }
+    [Fact]
+    public void ADeviceWithNoSoftwareVolumeSaysSoAndHidesTheBar()
+    {
+        // Measured case: an SSL 2 MkII exposes no virtual main volume at all,
+        // so there is no level to show and the dial cannot do anything.
+        var frame = VolumeRenderer.Render(VolumeSnapshot.HardwareOnly("SSL 2 Mk II"), "tile");
+        Assert.Equal(VolumeRenderer.HardwareOnlyText, frame.Track);
+        Assert.Equal("SSL 2 Mk II", frame.Artist);
+        Assert.False(frame.BarEnabled);
+        Assert.Equal(0, frame.BarValue);
+    }
+
+    [Fact]
+    public void HardwareOnlyIsDistinctFromNoDeviceAtAll()
+    {
+        var none = VolumeRenderer.Render(VolumeSnapshot.NoDevice, "tile");
+        var fixedVolume = VolumeRenderer.Render(VolumeSnapshot.HardwareOnly("SSL 2 Mk II"), "tile");
+        Assert.Equal(VolumeRenderer.NoDeviceText, none.Track);
+        Assert.NotEqual(none.Track, fixedVolume.Track);
+        Assert.Equal("", none.Artist);
+    }
+
+    [Fact]
+    public void ADeviceThatCanSetVolumeButNotMuteStillRendersTheBar()
+    {
+        var frame = VolumeRenderer.Render(new VolumeSnapshot("Odd Device", 0.5f, false, true, CanSetVolume: true, CanMute: false), "tile");
+        Assert.True(frame.BarEnabled);
+        Assert.Equal("Volume  50%", frame.Track);
+    }
+
 }
