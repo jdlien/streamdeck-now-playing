@@ -59,8 +59,28 @@ public sealed class MacMediaSessionService : IMediaSessionService
         _preferredAppId = options?.PreferredAppId;
         _music = new MusicAppAdapter(_log);
         _host = new MediaRemoteHost(_log);
-        _host.StateChanged += OnHostState;
-        _host.ArtworkReceived += OnHostArtwork;
+        _host.StateChanged += state =>
+        {
+            try
+            {
+                OnHostState(state);
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"handling a helper state failed: {ex.Message}");
+            }
+        };
+        _host.ArtworkReceived += (key, bytes) =>
+        {
+            try
+            {
+                OnHostArtwork(key, bytes);
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"handling helper artwork failed: {ex.Message}");
+            }
+        };
     }
 
     public NowPlayingSnapshot Current
@@ -347,19 +367,49 @@ public sealed class MacMediaSessionService : IMediaSessionService
                 return;
             }
 
-            if (routed)
+            if (!routed)
+            {
+                continue;
+            }
+
+            try
             {
                 await PublishMusicAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // This loop is the only thing that updates the display while
+                // Music owns the session: the helper cannot report Music's
+                // metadata, so it emits an identical line for every track and
+                // no event will restart this. Letting an exception escape here
+                // froze the dial permanently on whatever was playing at the
+                // time, which is exactly how it was found.
+                _log?.Invoke($"Music poll failed, continuing: {ex.Message}");
             }
         }
     }
 
     private async Task PublishMusicAsync(CancellationToken token)
     {
-        var state = await _music.ReadAsync(token).ConfigureAwait(false);
-        if (state is null)
+        var outcome = await _music.ReadAsync(token).ConfigureAwait(false);
+
+        // A query that failed says nothing about what Music is doing. Treating
+        // it as "stopped" gave up the route, and because the helper cannot
+        // report Music's metadata it emits an identical line for every track
+        // and never prompts a re-route, so the dial froze until the plugin was
+        // restarted. Keep the route and the last snapshot; try again next tick.
+        if (outcome.Status == MusicReadStatus.Failed)
         {
-            // Music stopped or went away. Hand back to MediaRemote if it is
+            return;
+        }
+
+        if (outcome.Status == MusicReadStatus.NotPlaying || outcome.State is null)
+        {
+            // Music really has nothing on. Hand back to MediaRemote if it is
             // there; if it is not, there is nothing else to ask.
             lock (_gate)
             {
@@ -378,6 +428,8 @@ public sealed class MacMediaSessionService : IMediaSessionService
 
             return;
         }
+
+        var state = outcome.State;
 
         var snapshot = new NowPlayingSnapshot(
             MusicAppAdapter.BundleId,
@@ -425,7 +477,25 @@ public sealed class MacMediaSessionService : IMediaSessionService
             _current = snapshot;
         }
 
-        SnapshotChanged?.Invoke(snapshot);
+        _log?.Invoke($"{snapshot.AppId ?? "nothing"}: {snapshot.State} \"{snapshot.Title}\"");
+        Raise(() => SnapshotChanged?.Invoke(snapshot), nameof(SnapshotChanged));
+    }
+
+    /// <summary>
+    /// Raise an event without letting a subscriber's failure escape into the
+    /// loop that raised it. Both publishers here run on long-lived tasks that
+    /// nothing restarts.
+    /// </summary>
+    private void Raise(Action raise, string name)
+    {
+        try
+        {
+            raise();
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"a {name} handler threw: {ex.Message}");
+        }
     }
 
     private void SetArtwork(string? key, byte[]? bytes)
@@ -443,7 +513,7 @@ public sealed class MacMediaSessionService : IMediaSessionService
             artwork = _artwork;
         }
 
-        ArtworkChanged?.Invoke(artwork);
+        Raise(() => ArtworkChanged?.Invoke(artwork), nameof(ArtworkChanged));
     }
 
     public async ValueTask DisposeAsync()

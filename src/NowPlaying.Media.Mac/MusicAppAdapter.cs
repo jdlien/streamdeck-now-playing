@@ -2,6 +2,35 @@ using System.Diagnostics;
 
 namespace NowPlaying.Media;
 
+/// <summary>
+/// Why a read produced no state. The distinction matters: "Music says it is
+/// stopped" means hand the session back, while "Music did not answer" must not,
+/// because dropping the route on a slow query blanks the display and nothing
+/// restores it -- the helper cannot report Music's metadata, so it emits an
+/// identical line for every track and never prompts a re-route.
+/// </summary>
+internal enum MusicReadStatus
+{
+    /// <summary>A track is loaded and <see cref="MusicReadOutcome.State"/> describes it.</summary>
+    Ok,
+
+    /// <summary>Music is not running, or is stopped with no track. Genuinely nothing to show.</summary>
+    NotPlaying,
+
+    /// <summary>The query timed out or errored. Says nothing about what Music is doing.</summary>
+    Failed,
+}
+
+/// <summary>The result of asking Music what it is doing.</summary>
+internal readonly record struct MusicReadOutcome(MusicReadStatus Status, MusicState? State)
+{
+    public static MusicReadOutcome Ok(MusicState state) => new(MusicReadStatus.Ok, state);
+
+    public static readonly MusicReadOutcome NotPlaying = new(MusicReadStatus.NotPlaying, null);
+
+    public static readonly MusicReadOutcome Failed = new(MusicReadStatus.Failed, null);
+}
+
 /// <summary>What Music.app reports about itself.</summary>
 internal sealed record MusicState(
     PlaybackState State,
@@ -35,6 +64,13 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
 
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// Artwork moves far more data than a state read -- 935 KB for one track on
+    /// the development machine -- so it gets its own, longer bound. Sharing the
+    /// state timeout made artwork reads fail routinely.
+    /// </summary>
+    private static readonly TimeSpan ArtworkTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>Unit separator: safe in a field value, unlike anything typographic.</summary>
     private const string Separator = "";
 
@@ -55,20 +91,25 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
         end tell
         """;
 
-    /// <summary>Music's state, or null when it is not running, stopped, or did not answer in time.</summary>
-    public async Task<MusicState?> ReadAsync(CancellationToken cancellationToken = default)
+    /// <summary>What Music is doing, distinguishing "nothing on" from "did not answer".</summary>
+    public async Task<MusicReadOutcome> ReadAsync(CancellationToken cancellationToken = default)
     {
         var output = await RunAsync(StateScript, cancellationToken).ConfigureAwait(false);
-        if (output is null || output is "notrunning" or "stopped")
+        if (output is null)
         {
-            return null;
+            return MusicReadOutcome.Failed;   // timeout or error: tells us nothing
+        }
+
+        if (output is "notrunning" or "stopped")
+        {
+            return MusicReadOutcome.NotPlaying;
         }
 
         var parts = output.Split(Separator);
         if (parts.Length < 7)
         {
             log?.Invoke($"unexpected reply from Music: {parts.Length} fields");
-            return null;
+            return MusicReadOutcome.Failed;
         }
 
         var state = parts[0] switch
@@ -78,14 +119,14 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
             _ => PlaybackState.Stopped,
         };
 
-        return new MusicState(
+        return MusicReadOutcome.Ok(new MusicState(
             state,
             parts[1].Trim(),
             parts[2].Trim(),
             parts[3].Trim(),
             ParseSeconds(parts[4]),
             ParseSeconds(parts[5]),
-            parts[6].Trim());
+            parts[6].Trim()));
     }
 
     /// <summary>Artwork for the current track, or null when there is none.</summary>
@@ -120,7 +161,7 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
 
         try
         {
-            var result = await RunAsync(script, cancellationToken).ConfigureAwait(false);
+            var result = await RunAsync(script, cancellationToken, ArtworkTimeout).ConfigureAwait(false);
             if (result != "ok" || !File.Exists(path))
             {
                 return null;
@@ -191,10 +232,10 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
         return await RunAsync(script).ConfigureAwait(false) == "ok";
     }
 
-    private async Task<string?> RunAsync(string script, CancellationToken cancellationToken = default)
+    private async Task<string?> RunAsync(string script, CancellationToken cancellationToken = default, TimeSpan? bound = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(QueryTimeout);
+        timeout.CancelAfter(bound ?? QueryTimeout);
 
         var startInfo = new ProcessStartInfo("/usr/bin/osascript")
         {
