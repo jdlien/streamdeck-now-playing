@@ -30,7 +30,7 @@
     {
       "UUID": "com.jdlien.now-playing.dial",
       "Name": "Now Playing",
-      "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause.",
+      "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause. Turning can be set to change volume instead, with hold-and-turn to skip.",
       "Icon": "imgs/actions/now-playing/icon",
       "Controllers": [
         "Encoder"
@@ -39,7 +39,7 @@
       "Encoder": {
         "layout": "layouts/now-playing.json",
         "TriggerDescription": {
-          "Rotate": "Next / previous track",
+          "Rotate": "Next / previous track, or volume",
           "Push": "Play / pause",
           "Touch": "Play / pause"
         }

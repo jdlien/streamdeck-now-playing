@@ -700,9 +700,19 @@ own; a `showTitle` setting turns the drawn title and artist off.
 
 | Event | Payload fields used | Behaviour |
 | --- | --- | --- |
-| `dialRotate` | `ticks` (sign), `pressed` | One skip per event in the sign direction, regardless of magnitude. Minimum 200 ms between skips; extra events inside that window are dropped, never queued. Rotation while pressed is ignored in v1 (reserved for seek). |
-| `dialDown` | none | Toggle play/pause once. |
-| `dialUp` | none | Ignored, so a press never toggles twice. |
+| `dialRotate` | `ticks` (sign), `pressed` | One skip per event in the sign direction, regardless of magnitude. Minimum 200 ms between skips; extra events inside that window are dropped, never queued. Rotation while pressed is ignored, unless the dial's Turn setting is "changes volume". |
+| `dialDown` | none | Toggle play/pause once, in the default Turn mode. |
+| `dialUp` | none | Ignored in the default mode, so a press never toggles twice. |
+
+The Turn setting has a second mode, off by default: turning changes volume and
+holding the dial in while turning skips tracks. Track skipping by plain rotation
+can surprise someone reaching for volume, which is the more common thing to want
+from a dial, so the mode exists; it is not the default because the action is
+called Now Playing and skipping is what its dial has always done.
+
+In that mode the play/pause toggle moves from `dialDown` to `dialUp` and is
+suppressed when the dial was turned while held. Otherwise a hold-and-turn to
+skip would also toggle playback on the way in.
 | `touchTap` | `hold` | `hold: false` toggles play/pause once. `hold: true` is a distinct gesture and is ignored in v1. |
 
 `ticks` can exceed 1 per event on a fast spin, which is why the policy counts

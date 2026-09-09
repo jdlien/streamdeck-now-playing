@@ -10,13 +10,29 @@
     <sdpi-checkbox setting="showArt" default="true" label="Show album art behind the play/pause icon"></sdpi-checkbox>
   </sdpi-item>
 
+  <sdpi-item label="Turn">
+    <sdpi-select setting="rotate" default="track">
+      <option value="track">Skips tracks</option>
+      <option value="volume">Changes volume (hold in and turn to skip)</option>
+    </sdpi-select>
+  </sdpi-item>
+
+  <sdpi-item label="Volume step" id="volume-step-item">
+    <sdpi-select setting="volumeStep" default="2">
+      <option value="1">1%</option>
+      <option value="2">2%</option>
+      <option value="5">5%</option>
+      <option value="10">10%</option>
+    </sdpi-select>
+  </sdpi-item>
+
   <sdpi-item label="Player">
     <sdpi-select setting="preferredApp" global default="auto" datasource="sessions" hot-reload show-refresh
                  loading="Looking for players…" placeholder="Automatic (follow Windows)"></sdpi-select>
   </sdpi-item>
 
   <sdpi-item label="">
-    <small>Automatic follows whatever is playing. Pick a player to keep it on the strip even when a browser starts playing. Only players with an open media session are listed; press refresh after starting one.</small>
+    <small>With "Changes volume", pressing the dial without turning still plays and pauses; the toggle waits for you to let go, so a press-and-turn does not also pause. Automatic follows whatever is playing. Pick a player to keep it on the strip even when a browser starts playing. Only players with an open media session are listed; press refresh after starting one.</small>
   </sdpi-item>
 </body>
 </html>

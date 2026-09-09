@@ -5,17 +5,30 @@
     {
       "key": "icon",
       "type": "pixmap",
-      "rect": [ 4, 2, 36, 36 ],
+      "rect": [
+        4,
+        2,
+        36,
+        36
+      ],
       "zOrder": 1,
       "value": "imgs/icons/pause.svg"
     },
     {
       "key": "artist",
       "type": "text",
-      "rect": [ 46, 7, 150, 26 ],
+      "rect": [
+        46,
+        7,
+        150,
+        26
+      ],
       "zOrder": 1,
       "alignment": "left",
-      "font": { "size": 16, "weight": 400 },
+      "font": {
+        "size": 16,
+        "weight": 400
+      },
       "text-overflow": "ellipsis",
       "color": "lightGray",
       "value": ""
@@ -23,10 +36,18 @@
     {
       "key": "track",
       "type": "text",
-      "rect": [ 4, 38, 192, 26 ],
+      "rect": [
+        4,
+        38,
+        192,
+        26
+      ],
       "zOrder": 1,
       "alignment": "left",
-      "font": { "size": 16, "weight": 600 },
+      "font": {
+        "size": 16,
+        "weight": 600
+      },
       "text-overflow": "ellipsis",
       "color": "white",
       "value": "No media"
@@ -34,11 +55,19 @@
     {
       "key": "progress",
       "type": "bar",
-      "rect": [ 4, 68, 192, 8 ],
+      "rect": [
+        4,
+        68,
+        192,
+        8
+      ],
       "zOrder": 1,
       "subtype": 0,
       "border_w": 0,
-      "range": { "min": 0, "max": 1000 },
+      "range": {
+        "min": 0,
+        "max": 1000
+      },
       "bar_bg_c": "#333333",
       "bar_fill_c": "white",
       "value": 0,
@@ -47,21 +76,71 @@
     {
       "key": "elapsed",
       "type": "text",
-      "rect": [ 4, 78, 80, 20 ],
+      "rect": [
+        4,
+        78,
+        50,
+        20
+      ],
       "zOrder": 1,
       "alignment": "left",
-      "font": { "size": 14, "weight": 400 },
+      "font": {
+        "size": 14,
+        "weight": 400
+      },
       "text-overflow": "clip",
       "color": "lightGray",
       "value": ""
     },
     {
+      "key": "volumeIcon",
+      "type": "pixmap",
+      "rect": [
+        68,
+        78,
+        20,
+        20
+      ],
+      "zOrder": 1,
+      "value": "imgs/icons/speaker.svg",
+      "opacity": 0.45,
+      "enabled": false
+    },
+    {
+      "key": "volumeText",
+      "type": "text",
+      "rect": [
+        91,
+        78,
+        40,
+        20
+      ],
+      "zOrder": 1,
+      "alignment": "left",
+      "font": {
+        "size": 14,
+        "weight": 400
+      },
+      "text-overflow": "clip",
+      "color": "lightGray",
+      "opacity": 0.45,
+      "value": ""
+    },
+    {
       "key": "total",
       "type": "text",
-      "rect": [ 116, 78, 80, 20 ],
+      "rect": [
+        146,
+        78,
+        50,
+        20
+      ],
       "zOrder": 1,
       "alignment": "right",
-      "font": { "size": 14, "weight": 400 },
+      "font": {
+        "size": 14,
+        "weight": 400
+      },
       "text-overflow": "clip",
       "color": "lightGray",
       "value": ""
