@@ -1,12 +1,18 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/NowPlaying.Audio/NowPlaying.Audio.csproj" />
+    <Project Path="src/NowPlaying.Audio.Windows/NowPlaying.Audio.Windows.csproj" />
+    <Project Path="src/NowPlaying.Audio.Mac/NowPlaying.Audio.Mac.csproj" />
     <Project Path="src/NowPlaying.Device/NowPlaying.Device.csproj" />
+    <Project Path="src/NowPlaying.Device.Windows/NowPlaying.Device.Windows.csproj" />
+    <Project Path="src/NowPlaying.Device.Mac/NowPlaying.Device.Mac.csproj" />
     <Project Path="src/NowPlaying.Media.Cli/NowPlaying.Media.Cli.csproj" />
     <Project Path="src/NowPlaying.Media/NowPlaying.Media.csproj" />
+    <Project Path="src/NowPlaying.Media.Windows/NowPlaying.Media.Windows.csproj" />
     <Project Path="src/NowPlaying.Plugin/NowPlaying.Plugin.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NowPlaying.Media.Tests/NowPlaying.Media.Tests.csproj" />
+    <Project Path="tests/NowPlaying.Windows.Tests/NowPlaying.Windows.Tests.csproj" />
   </Folder>
 </Solution>

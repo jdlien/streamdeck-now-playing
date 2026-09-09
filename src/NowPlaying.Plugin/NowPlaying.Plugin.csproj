@@ -2,32 +2,56 @@
 
   <!--
     The Stream Deck plugin host (README section 3, decision 2): one process,
-    StreamDeck-Tools for the WebSocket protocol, the media library for the
-    rest.
+    StreamDeck-Tools for the WebSocket protocol, the media library for the rest.
 
-    WinExe, not Exe: the Stream Deck app launches this process and a console
-    subsystem would put a window on screen. Logging goes to the plugin log.
+    Multi-targeted since the macOS port. The Windows target keeps the WinExe
+    subsystem and references the Windows implementation projects; the neutral
+    target is what macOS publishes and carries no platform implementations of
+    its own yet (macos-port-plan M0/M1).
 
     Build output goes straight into the .sdPlugin folder so that
     `streamdeck link` on that folder plus `streamdeck restart` after each build
-    is the whole dev loop. The manifest's CodePathWin points at bin/NowPlaying.exe.
+    is the whole dev loop. The two targets must not share a directory, so the
+    Mac build lands in bin/mac and the manifest's CodePathMac points there.
   -->
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <TargetFrameworks>net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>NowPlaying.Plugin</RootNamespace>
     <AssemblyName>NowPlaying</AssemblyName>
   </PropertyGroup>
 
-  <!-- Debug builds land in the linked plugin folder. Release builds and publishes use the default bin/ so they never touch a running dev build. -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-    <OutDir>$(MSBuildProjectDirectory)/com.jdlien.now-playing.sdPlugin/bin/</OutDir>
+  <!-- WinExe, not Exe: the Stream Deck app launches this process and a console subsystem would put a window on screen. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+    <OutputType>WinExe</OutputType>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' != 'net10.0-windows10.0.19041.0'">
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!--
+    Debug builds on Windows land straight in the linked plugin folder, which is
+    what makes `streamdeck link` + `streamdeck restart` the whole dev loop.
+    Only the Windows target does this: pointing a second target at a flat
+    directory breaks project-reference resolution for anything referencing this
+    project, so the Mac target keeps the default bin/Debug/net10.0 path and
+    M1's publish step places it in the plugin folder instead.
+    Release builds and publishes use the default bin/ so they never touch a
+    running dev build.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug' And '$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <OutDir>$(MSBuildProjectDirectory)/com.jdlien.now-playing.sdPlugin/bin/</OutDir>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The hubs and the name map are internal; the portable suite tests them directly. -->
+    <InternalsVisibleTo Include="NowPlaying.Media.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="StreamDeck-Tools" Version="7.0.0" />
@@ -35,5 +59,38 @@
     <ProjectReference Include="..\NowPlaying.Audio\NowPlaying.Audio.csproj" />
     <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
   </ItemGroup>
+
+  <!-- Platform implementations and the factory that picks them: one file per target, never both. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+    <ProjectReference Include="..\NowPlaying.Media.Windows\NowPlaying.Media.Windows.csproj" />
+    <ProjectReference Include="..\NowPlaying.Audio.Windows\NowPlaying.Audio.Windows.csproj" />
+    <ProjectReference Include="..\NowPlaying.Device.Windows\NowPlaying.Device.Windows.csproj" />
+    <Compile Remove="Platform/PlatformServices.Portable.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows10.0.19041.0'">
+    <ProjectReference Include="..\NowPlaying.Audio.Mac\NowPlaying.Audio.Mac.csproj" />
+    <ProjectReference Include="..\NowPlaying.Device.Mac\NowPlaying.Device.Mac.csproj" />
+    <Compile Remove="Platform/PlatformServices.Windows.cs" />
+  </ItemGroup>
+
+  <!--
+    The macOS counterpart of the Windows flat OutDir above. A post-build copy
+    rather than an OutDir override, because overriding OutDir on a second target
+    breaks project-reference resolution for anything referencing this project.
+    Lands where the manifest's CodePathMac points, so `streamdeck restart` after
+    a build is the same dev loop as on Windows.
+  -->
+  <Target Name="CopyMacBuildIntoPluginFolder"
+          AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Debug' And '$(TargetFramework)' == 'net10.0' And '$([MSBuild]::IsOSPlatform(OSX))' == 'true'">
+    <ItemGroup>
+      <MacPluginOutput Include="$(OutDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(MacPluginOutput)"
+          DestinationFiles="@(MacPluginOutput->'$(MSBuildProjectDirectory)/com.jdlien.now-playing.sdPlugin/bin/mac/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Message Importance="normal" Text="Copied the macOS build into com.jdlien.now-playing.sdPlugin/bin/mac" />
+  </Target>
 
 </Project>

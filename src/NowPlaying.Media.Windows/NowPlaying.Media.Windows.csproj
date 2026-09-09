@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Windows implementation of IMediaSessionService, over
+    Windows.Media.Control. Split out of NowPlaying.Media so that the snapshot
+    model and the pure ranking/timeline logic stay on a platform-neutral target
+    the macOS build and the tests can use (macos-port-plan D1).
+
+    The Windows-versioned target framework pulls in the WinRT projection.
+    SupportedOSPlatformVersion is 1809 (build 17763), the first Windows with
+    GlobalSystemMediaTransportControlsSessionManager.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Media</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NowPlaying.Media.Tests" />
+  </ItemGroup>
+
+</Project>

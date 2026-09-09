@@ -7,7 +7,7 @@ namespace NowPlaying.Plugin;
 internal static class VolumeHub
 {
     private static readonly object Gate = new();
-    private static VolumeService? _service;
+    private static IVolumeService? _service;
 
     /// <summary>Raised on a Core Audio callback thread whenever the volume state changes.</summary>
     public static event Action<VolumeSnapshot>? Changed;
@@ -23,7 +23,13 @@ internal static class VolumeHub
                 return;
             }
 
-            var service = new VolumeService(message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[volume] {message}"));
+            var service = PlatformServices.CreateVolume(message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[volume] {message}"));
+            if (service is null)
+            {
+                Logger.Instance.LogMessage(TracingLevel.INFO, "[volume] no implementation on this platform");
+                return;
+            }
+
             service.Changed += snapshot => Changed?.Invoke(snapshot);
             _service = service;
             try

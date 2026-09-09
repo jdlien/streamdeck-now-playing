@@ -11,7 +11,7 @@ namespace NowPlaying.Plugin;
 internal static class MediaHub
 {
     private static readonly object Gate = new();
-    private static MediaSessionService? _service;
+    private static IMediaSessionService? _service;
     private static int _attached;
 
     /// <summary>Raised on the service's loop whenever the snapshot changes significantly.</summary>
@@ -36,10 +36,16 @@ internal static class MediaHub
                 return;
             }
 
-            var service = new MediaSessionService(new MediaSessionServiceOptions
+            var service = PlatformServices.CreateMedia(new MediaSessionServiceOptions
             {
                 Log = message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[media] {message}"),
             });
+            if (service is null)
+            {
+                Logger.Instance.LogMessage(TracingLevel.INFO, "[media] no implementation on this platform");
+                return;
+            }
+
             service.SnapshotChanged += snapshot => SnapshotChanged?.Invoke(snapshot);
             service.ArtworkChanged += artwork => ArtworkChanged?.Invoke(artwork);
             _service = service;

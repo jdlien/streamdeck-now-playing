@@ -17,8 +17,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
+    <ProjectReference Include="..\NowPlaying.Media.Windows\NowPlaying.Media.Windows.csproj" />
     <ProjectReference Include="..\NowPlaying.Audio\NowPlaying.Audio.csproj" />
+    <ProjectReference Include="..\NowPlaying.Audio.Windows\NowPlaying.Audio.Windows.csproj" />
     <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
+    <ProjectReference Include="..\NowPlaying.Device.Windows\NowPlaying.Device.Windows.csproj" />
   </ItemGroup>
 
 </Project>

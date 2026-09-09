@@ -1,22 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    System volume for the default output device, over Core Audio's
-    IAudioEndpointVolume through NAudio's WASAPI package. No Stream Deck
-    dependency, like NowPlaying.Media.
+    The system-volume contract and its snapshot. No Stream Deck dependency,
+    like NowPlaying.Media, and no platform dependency: the implementations live
+    in NowPlaying.Audio.Windows and (from the macOS port) NowPlaying.Audio.Mac.
   -->
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>NowPlaying.Audio</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
-  </ItemGroup>
 
 </Project>

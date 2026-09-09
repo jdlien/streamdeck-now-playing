@@ -213,7 +213,7 @@ internal static class Program
             try
             {
                 var (min, current, max) = NowPlaying.Device.MonitorConfiguration.ReadBrightness(m.Handle);
-                var percent = NowPlaying.Device.MonitorConfiguration.ToPercent(min, current, max);
+                var percent = NowPlaying.Device.BrightnessMath.ToPercent(min, current, max);
                 Console.WriteLine($"  {m.GdiDeviceName}{(m.IsPrimary ? " (primary)" : "")}  '{m.Name}'  brightness {current} of {min}..{max} = {percent}%  ({sw.ElapsedMilliseconds} ms)");
             }
             catch (Exception ex)

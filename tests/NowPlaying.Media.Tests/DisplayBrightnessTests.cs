@@ -16,7 +16,7 @@ public class DisplayBrightnessTests
     [InlineData(5u, 5u, 5u, 0)]
     public void PercentFollowsTheMonitorsOwnRange(uint min, uint current, uint max, int expected)
     {
-        Assert.Equal(expected, MonitorConfiguration.ToPercent(min, current, max));
+        Assert.Equal(expected, BrightnessMath.ToPercent(min, current, max));
     }
 
     [Theory]
@@ -28,7 +28,7 @@ public class DisplayBrightnessTests
     [InlineData(5u, 5u, 40, 5u)]
     public void UnitsRoundTripFromPercent(uint min, uint max, int percent, uint expected)
     {
-        Assert.Equal(expected, MonitorConfiguration.ToUnits(min, max, percent));
+        Assert.Equal(expected, BrightnessMath.ToUnits(min, max, percent));
     }
 
     [Fact]
@@ -67,19 +67,6 @@ public class DisplayBrightnessTests
     }
 
     [Fact]
-    public void BeforeBindingNothingResolvesAndNothingNeighbours()
-    {
-        using var service = new DisplayBrightnessService();
-        Assert.Null(service.Resolve(null));
-        Assert.Null(service.Resolve("Odyssey G95NC"));
-        Assert.Null(service.Neighbor(null, 1));
-        Assert.Equal(DisplayBrightnessSnapshot.Unavailable, service.Get(null));
-        Assert.Equal("DELL U2723QE not connected", service.Get("DELL U2723QE").Name);
-        Assert.False(service.Adjust(null, 2));
-        Assert.False(service.Toggle("anything"));
-    }
-
-    [Fact]
     public void TheMonitorTilesRenderAndDiffer()
     {
         var on = ArtRenderer.RenderMonitorTile(dimmed: false);
@@ -87,19 +74,5 @@ public class DisplayBrightnessTests
         Assert.NotEqual(on, dimmed);
         using var bitmap = SKBitmap.Decode(on);
         Assert.Equal((ArtRenderer.DialTileSize, ArtRenderer.DialTileSize), (bitmap!.Width, bitmap.Height));
-    }
-
-    [Fact]
-    public void MonitorEnumerationDoesNotThrowAndNamesAreNonEmpty()
-    {
-        var monitors = MonitorConfiguration.Enumerate();
-        try
-        {
-            Assert.All(monitors, m => Assert.False(string.IsNullOrWhiteSpace(m.Name)));
-        }
-        finally
-        {
-            MonitorConfiguration.Destroy(monitors);
-        }
     }
 }

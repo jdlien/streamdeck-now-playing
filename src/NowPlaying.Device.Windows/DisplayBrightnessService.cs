@@ -1,20 +1,5 @@
 namespace NowPlaying.Device;
 
-/// <summary>One monitor's brightness as the plugin knows it.</summary>
-/// <param name="Name">The monitor's name from its EDID, or the driver's description.</param>
-/// <param name="Level">Brightness as a percent of the monitor's own range; the level to restore when dimmed.</param>
-/// <param name="Dimmed">Whether the toggle has taken the monitor to its minimum without forgetting the level.</param>
-/// <param name="Available">False when this monitor does not answer DDC/CI or is not connected.</param>
-/// <param name="Index">Position among the monitors that answer, 0-based, primary first.</param>
-/// <param name="Count">How many monitors answer DDC/CI.</param>
-public sealed record DisplayBrightnessSnapshot(string Name, int Level, bool Dimmed, bool Available, int Index = 0, int Count = 0)
-{
-    public static DisplayBrightnessSnapshot Unavailable { get; } = new("No DDC/CI monitor", 0, false, false);
-
-    /// <summary>What is sent to the monitor, as a percent.</summary>
-    public int Effective => Dimmed ? 0 : Level;
-}
-
 /// <summary>
 /// Brightness of every monitor that answers DDC/CI, addressed by name. Each
 /// dial binds to a monitor (or to "automatic", the primary) and reads and
@@ -27,7 +12,7 @@ public sealed record DisplayBrightnessSnapshot(string Name, int Level, bool Dimm
 /// not a queue), reads never follow a write directly, and failures schedule
 /// a re-bind with backoff rather than an immediate retry.
 /// </summary>
-public sealed class DisplayBrightnessService : IDisposable
+public sealed class DisplayBrightnessService : IDisplayBrightnessService
 {
     /// <summary>Restore level when un-dimming from a level of 0.</summary>
     public const int RestoreFloor = 30;
@@ -368,7 +353,7 @@ public sealed class DisplayBrightnessService : IDisposable
             try
             {
                 var (min, current, max) = MonitorConfiguration.ReadBrightness(monitor.Handle);
-                var percent = MonitorConfiguration.ToPercent(min, current, max);
+                var percent = BrightnessMath.ToPercent(min, current, max);
                 var old = previous.FirstOrDefault(c => string.Equals(c.State.Name, monitor.Name, StringComparison.OrdinalIgnoreCase));
                 // A monitor we had dimmed still reads as its minimum after a re-bind; keep the remembered level.
                 var state = old is { State.Dimmed: true } && percent == 0
@@ -419,7 +404,7 @@ public sealed class DisplayBrightnessService : IDisposable
     {
         try
         {
-            MonitorConfiguration.WriteBrightness(channel.Monitor.Handle, MonitorConfiguration.ToUnits(channel.Min, channel.Max, percent));
+            MonitorConfiguration.WriteBrightness(channel.Monitor.Handle, BrightnessMath.ToUnits(channel.Min, channel.Max, percent));
             lock (_gate)
             {
                 channel.LastWriteUtc = DateTime.UtcNow;
@@ -441,7 +426,7 @@ public sealed class DisplayBrightnessService : IDisposable
         try
         {
             var (min, current, max) = MonitorConfiguration.ReadBrightness(channel.Monitor.Handle);
-            var percent = MonitorConfiguration.ToPercent(min, current, max);
+            var percent = BrightnessMath.ToPercent(min, current, max);
 
             DisplayBrightnessSnapshot next;
             lock (_gate)

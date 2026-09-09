@@ -5,7 +5,7 @@ namespace NowPlaying.Device;
 /// Applying is synchronous and quick (one HID feature report per device),
 /// so callers may use it from input handlers.
 /// </summary>
-public sealed class BrightnessService
+public sealed class BrightnessService : IStreamDeckBrightness
 {
     private readonly object _gate = new();
     private readonly Action<string>? _log;

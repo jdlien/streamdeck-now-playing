@@ -140,30 +140,6 @@ public static class MonitorConfiguration
         throw new Win32Exception(error, $"SetMonitorBrightness failed {Attempts} times: 0x{error:x8} {new Win32Exception(error).Message}");
     }
 
-    /// <summary>Percent 0..100 from a value in the monitor's range.</summary>
-    public static int ToPercent(uint min, uint current, uint max)
-    {
-        if (max <= min)
-        {
-            return 0;
-        }
-
-        var clamped = Math.Clamp(current, min, max);
-        return (int)Math.Round((clamped - min) * 100.0 / (max - min));
-    }
-
-    /// <summary>A value in the monitor's range from a percent 0..100.</summary>
-    public static uint ToUnits(uint min, uint max, int percent)
-    {
-        if (max <= min)
-        {
-            return min;
-        }
-
-        var p = Math.Clamp(percent, 0, 100);
-        return min + (uint)Math.Round(p / 100.0 * (max - min));
-    }
-
     // -- friendly names via the display configuration API -------------------
 
     /// <summary>GDI device name (\\.\DISPLAYn) to the monitor's EDID friendly name, for every active path.</summary>

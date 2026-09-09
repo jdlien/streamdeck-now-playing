@@ -75,12 +75,4 @@ public class BrightnessTests
         var centre = bitmap.GetPixel(ArtRenderer.DialTileSize / 2, ArtRenderer.DialTileSize / 2);
         Assert.True(centre.Red > 240 && centre.Green > 240, "the sun's disc is white");
     }
-
-    [Fact]
-    public void DeviceEnumerationDoesNotThrow()
-    {
-        // Reads the PnP tree only; count depends on what is plugged in.
-        var paths = StreamDeckHid.FindDevicePaths();
-        Assert.All(paths, p => Assert.Contains("vid_0fd9&pid_0084", p, StringComparison.OrdinalIgnoreCase));
-    }
 }

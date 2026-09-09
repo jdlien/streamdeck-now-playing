@@ -11,8 +11,11 @@ namespace NowPlaying.Plugin;
 internal static class BrightnessHub
 {
     private static readonly object Gate = new();
-    private static BrightnessService? _service;
+    private static IStreamDeckBrightness? _service;
     private static bool _loadedFromSettings;
+
+    /// <summary>Whether this platform can drive the deck's screen at all.</summary>
+    public static bool IsSupported => PlatformServices.SupportsStreamDeckBrightness;
 
     /// <summary>Raised after every applied change.</summary>
     public static event Action<BrightnessState>? Changed;
@@ -28,9 +31,15 @@ internal static class BrightnessHub
                 return;
             }
 
-            var service = new BrightnessService(
+            var service = PlatformServices.CreateStreamDeckBrightness(
                 BrightnessState.Default,
                 message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {message}"));
+            if (service is null)
+            {
+                Logger.Instance.LogMessage(TracingLevel.INFO, "[brightness] no implementation on this platform");
+                return;
+            }
+
             service.Changed += (state, applied) =>
             {
                 Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {state.Effective}% ({(state.Dimmed ? "dimmed" : "on")}, level {state.Level}) -> {applied} device(s)");
@@ -47,7 +56,7 @@ internal static class BrightnessHub
     /// </summary>
     public static void LoadSavedLevel(int? level)
     {
-        BrightnessService? service;
+        IStreamDeckBrightness? service;
         lock (Gate)
         {
             if (_loadedFromSettings || _service is null)

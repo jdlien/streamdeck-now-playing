@@ -1,0 +1,13 @@
+<Project>
+
+  <!--
+    Building the Windows-targeted projects on macOS or Linux needs this opt-in;
+    it is a no-op on Windows. Having it here means a macOS checkout can compile
+    the Windows half of the solution, which is how the port keeps both
+    platforms honest from one machine. It does not make them runnable.
+  -->
+  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(Windows))' != 'true'">
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+</Project>

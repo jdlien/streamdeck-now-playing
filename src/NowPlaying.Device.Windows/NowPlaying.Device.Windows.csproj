@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows implementations of the device contracts: Stream Deck brightness
+    over a HID feature report, monitor brightness over DDC/CI. Plain Win32
+    (cfgmgr32 + hid.dll + dxva2), no HID library, because HID library
+    enumeration opens every device on the machine and the PnP manager can list
+    interface paths without opening any.
+
+    Split out of NowPlaying.Device so the state records, the percent maths and
+    the service contracts stay platform-neutral (macos-port-plan D1).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>NowPlaying.Device</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NowPlaying.Windows.Tests" />
+  </ItemGroup>
+
+</Project>

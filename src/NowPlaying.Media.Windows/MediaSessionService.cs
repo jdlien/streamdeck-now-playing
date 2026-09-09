@@ -760,7 +760,7 @@ public sealed class MediaSessionService : IMediaSessionService
         {
             if (snapshot != _current)
             {
-                significant = IsSignificantChange(_current, snapshot, now);
+                significant = SnapshotChange.IsSignificant(_current, snapshot, now);
                 _current = snapshot;
             }
         }
@@ -788,29 +788,6 @@ public sealed class MediaSessionService : IMediaSessionService
             ArtworkChanged?.Invoke(artwork);
         }
     }
-
-    /// <summary>A change is significant unless only the reported position moved by less than <see cref="SeekThreshold"/>.</summary>
-    internal static bool IsSignificantChange(NowPlayingSnapshot previous, NowPlayingSnapshot next, DateTimeOffset now)
-    {
-        var previousAligned = previous with { Position = next.Position, PositionAt = next.PositionAt };
-        if (previousAligned != next)
-        {
-            return true; // state, text, duration, or a control flag changed
-        }
-
-        var before = previous.EffectivePosition(now);
-        var after = next.EffectivePosition(now);
-        if (before is null || after is null)
-        {
-            return before != after;
-        }
-
-        var jump = after.Value - before.Value;
-        return jump < -SeekThreshold || jump > SeekThreshold;
-    }
-
-    /// <summary>A position change beyond this, relative to the extrapolated position, is a seek and is published immediately.</summary>
-    internal static readonly TimeSpan SeekThreshold = TimeSpan.FromSeconds(2);
 
     private async Task<bool> ExecuteAsync(CommandKind kind, CancellationToken ct)
     {

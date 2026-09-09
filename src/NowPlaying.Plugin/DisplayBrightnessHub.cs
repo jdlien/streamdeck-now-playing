@@ -7,7 +7,7 @@ namespace NowPlaying.Plugin;
 internal static class DisplayBrightnessHub
 {
     private static readonly object Gate = new();
-    private static DisplayBrightnessService? _service;
+    private static IDisplayBrightnessService? _service;
 
     /// <summary>One monitor's snapshot changed.</summary>
     public static event Action<string, DisplayBrightnessSnapshot>? Changed;
@@ -24,7 +24,13 @@ internal static class DisplayBrightnessHub
                 return;
             }
 
-            var service = new DisplayBrightnessService(message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[display] {message}"));
+            var service = PlatformServices.CreateDisplayBrightness(message => Logger.Instance.LogMessage(TracingLevel.INFO, $"[display] {message}"));
+            if (service is null)
+            {
+                Logger.Instance.LogMessage(TracingLevel.INFO, "[display] no implementation on this platform");
+                return;
+            }
+
             service.Changed += (name, snapshot) => Changed?.Invoke(name, snapshot);
             service.MonitorsChanged += () => MonitorsChanged?.Invoke();
             _service = service;

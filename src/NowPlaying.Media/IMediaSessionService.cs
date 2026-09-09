@@ -2,7 +2,7 @@ namespace NowPlaying.Media;
 
 /// <summary>
 /// The one media subscription the plugin shares between all action instances
-/// (README section 4). <see cref="MediaSessionService"/> implements it over
+/// (README section 4). NowPlaying.Media.Windows implements it over
 /// Windows.Media.Control; the console harness is its first consumer.
 /// </summary>
 public interface IMediaSessionService : IAsyncDisposable

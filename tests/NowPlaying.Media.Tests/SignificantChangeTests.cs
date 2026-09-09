@@ -19,36 +19,36 @@ public class SignificantChangeTests
     public void ARoutineTimelineRefreshIsNotSignificant()
     {
         // Reported 100 s two seconds ago, then 102 s just now: the same place.
-        Assert.False(MediaSessionService.IsSignificantChange(At(100, 2), At(102, 0), Now));
+        Assert.False(SnapshotChange.IsSignificant(At(100, 2), At(102, 0), Now));
         // Half-second cadence with whole-second positions wobbles by less than a second.
-        Assert.False(MediaSessionService.IsSignificantChange(At(100, 0.5), At(100, 0), Now));
+        Assert.False(SnapshotChange.IsSignificant(At(100, 0.5), At(100, 0), Now));
     }
 
     [Fact]
     public void ASeekIsSignificant()
     {
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 1), At(150, 0), Now));
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 1), At(30, 0), Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 1), At(150, 0), Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 1), At(30, 0), Now));
     }
 
     [Fact]
     public void AStateChangeIsSignificant()
     {
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 0), At(100, 0, PlaybackState.Paused), Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 0), At(100, 0, PlaybackState.Paused), Now));
     }
 
     [Fact]
     public void ATextOrDurationOrControlChangeIsSignificant()
     {
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 0), At(100, 0) with { Title = "Other" }, Now));
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 0), At(100, 0) with { Duration = TimeSpan.FromSeconds(301) }, Now));
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 0), At(100, 0) with { CanNext = false }, Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 0), At(100, 0) with { Title = "Other" }, Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 0), At(100, 0) with { Duration = TimeSpan.FromSeconds(301) }, Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 0), At(100, 0) with { CanNext = false }, Now));
     }
 
     [Fact]
     public void GainingOrLosingATimelineIsSignificant()
     {
-        Assert.True(MediaSessionService.IsSignificantChange(At(100, 0), At(100, 0) with { Position = null, Duration = null }, Now));
-        Assert.True(MediaSessionService.IsSignificantChange(NowPlayingSnapshot.Empty, At(0, 0), Now));
+        Assert.True(SnapshotChange.IsSignificant(At(100, 0), At(100, 0) with { Position = null, Duration = null }, Now));
+        Assert.True(SnapshotChange.IsSignificant(NowPlayingSnapshot.Empty, At(0, 0), Now));
     }
 }
