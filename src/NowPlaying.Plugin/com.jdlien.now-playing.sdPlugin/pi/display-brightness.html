@@ -11,8 +11,12 @@
                  loading="Looking for monitors…" placeholder="Automatic (primary monitor)"></sdpi-select>
   </sdpi-item>
 
-  <sdpi-item label="Cycle">
+  <sdpi-item label="Cycle" id="deck-cycle-item">
     <sdpi-checkbox setting="includeStreamDeck" default="true" label="Include the Stream Deck's own screen"></sdpi-checkbox>
+  </sdpi-item>
+
+  <sdpi-item label="Name">
+    <sdpi-textfield setting="renameTo" placeholder="Custom name for this screen" maxlength="24"></sdpi-textfield>
   </sdpi-item>
 
   <sdpi-item label="Step per click">
@@ -52,7 +56,22 @@
   </sdpi-item>
 
   <sdpi-item label="">
-    <small>Controls one screen's brightness: a monitor over DDC/CI, the same channel the monitor's own menu uses, or the Stream Deck itself. Each dial has its own target, so two dials can serve two screens; "next" and "previous" move this dial through the list and remember the choice. If a monitor is missing from the list, enable DDC/CI in its menu; HDR mode may also lock brightness on some monitors.</small>
+    <small id="blurb">Controls one screen's brightness: a monitor over DDC/CI, the same channel the monitor's own menu uses, or the Stream Deck itself. Each dial has its own target, so two dials can serve two screens; "next" and "previous" move this dial through the list and remember the choice. If a monitor is missing from the list, enable DDC/CI in its menu; HDR mode may also lock brightness on some monitors.</small>
   </sdpi-item>
+
+  <script>
+    // The Stream Deck's own screen cannot be driven from a plugin on macOS:
+    // the Stream Deck app opens the HID device exclusively. Hiding the option
+    // there keeps the dial's cycle honest rather than offering a dead target.
+    // Elgato's own built-in Brightness action still works, and is the
+    // replacement to point people at.
+    if (/Mac/i.test(navigator.platform) || /Mac OS X/i.test(navigator.userAgent)) {
+      document.getElementById('deck-cycle-item')?.remove();
+      const blurb = document.getElementById('blurb');
+      if (blurb) {
+        blurb.textContent = "Controls one screen's brightness: Apple displays natively, and other monitors over DDC/CI, the same channel the monitor's own menu uses. Each dial has its own target, so two dials can serve two screens; \"next\" and \"previous\" move this dial through the list and remember the choice. If a monitor is missing from the list, enable DDC/CI in its menu. The Stream Deck's own screen is not available here \u2014 use Elgato's built-in Brightness action for that.";
+      }
+    }
+  </script>
 </body>
 </html>

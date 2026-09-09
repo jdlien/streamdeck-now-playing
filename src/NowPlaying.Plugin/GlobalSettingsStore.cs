@@ -23,6 +23,7 @@ internal static class GlobalSettingsStore
             _latest = settings is null ? new JObject() : (JObject)settings.DeepClone();
         }
 
+        DisplayNames.Apply(settings);
         MediaHub.SetPreferredAppId(PropertyInspectorBridge.PreferredAppFrom(settings));
         BrightnessHub.LoadSavedLevel(settings?[BrightnessKey]?.Type == JTokenType.Integer ? (int?)settings[BrightnessKey]!.Value<int>() : null);
     }

@@ -12,7 +12,7 @@
     {
       "key": "artist",
       "type": "text",
-      "rect": [ 46, 7, 116, 26 ],
+      "rect": [ 42, 7, 154, 26 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 400 },
@@ -23,7 +23,7 @@
     {
       "key": "badge",
       "type": "text",
-      "rect": [ 164, 10, 32, 22 ],
+      "rect": [ 175, 41, 21, 20 ],
       "zOrder": 1,
       "alignment": "right",
       "font": { "size": 13, "weight": 400 },
@@ -34,7 +34,7 @@
     {
       "key": "track",
       "type": "text",
-      "rect": [ 4, 38, 192, 26 ],
+      "rect": [ 4, 38, 168, 26 ],
       "zOrder": 1,
       "alignment": "left",
       "font": { "size": 16, "weight": 600 },

@@ -89,4 +89,22 @@ public class DisplayTargetsTests
         Assert.Equal("3/3", DisplayBrightnessRenderer.MonitorBadge(snapshot));
         Assert.Equal("Dimmed  60%", DisplayBrightnessRenderer.Render(snapshot, "tile").Track);
     }
+
+    [Fact]
+    public void ABindingSurvivesAPresentationOnlyRename()
+    {
+        // A dial bound before "StudioDisplay" was tidied to "Studio Display"
+        // must keep working rather than reporting the screen as disconnected.
+        string[] monitors = ["Studio Display XDR", "BenQ MA270S", "Studio Display"];
+        Assert.Equal("Studio Display", DisplayTargets.Resolve("StudioDisplay", monitors, includeStreamDeck: false));
+    }
+
+    [Fact]
+    public void TheLooseMatchDoesNotConflateDifferentMonitors()
+    {
+        string[] monitors = ["Studio Display XDR", "Studio Display"];
+        Assert.Equal("Studio Display XDR", DisplayTargets.Resolve("StudioDisplayXDR", monitors, includeStreamDeck: false));
+        Assert.Null(DisplayTargets.Resolve("Studio Display Pro", monitors, includeStreamDeck: false));
+        Assert.Null(DisplayTargets.Resolve("BenQ MA270S", monitors, includeStreamDeck: false));
+    }
 }

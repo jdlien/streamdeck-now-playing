@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    macOS monitor brightness. Two protocols behind one service: DisplayServices
+    for Apple panels, DDC/CI over IOAVService for everything else. Both are
+    private frameworks reached by dlopen, so every entry point is optional and
+    a missing one degrades to "unavailable" rather than throwing.
+
+    Stream Deck brightness has no macOS implementation here on purpose: the
+    Stream Deck app seizes the HID device (macos-port-plan S2).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>NowPlaying.Device</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
+  </ItemGroup>
+
+</Project>

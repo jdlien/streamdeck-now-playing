@@ -4,8 +4,15 @@ namespace NowPlaying.Plugin;
 
 /// <summary>
 /// Maps a target's brightness onto the shared six-item layout, plus the
-/// layout's seventh item: a small right-aligned "1/2" badge at the end of
-/// the name row when there is more than one target to cycle through.
+/// layout's seventh item: a small right-aligned "1/2" badge showing which
+/// screen of how many this dial is on, when there is more than one to cycle
+/// through.
+///
+/// The badge sits at the right of the value row rather than the name row.
+/// Screen names are long -- "Studio Display XDR" measures 146px at the layout's
+/// font, against 135px of name row once the icon and a badge are taken out --
+/// so the name gets the whole top row and the badge takes some of the 53px the
+/// value row has spare.
 /// </summary>
 public static class DisplayBrightnessRenderer
 {

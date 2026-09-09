@@ -29,7 +29,41 @@ public static class DisplayTargets
             return monitors.Count > 0 ? monitors[0] : includeStreamDeck ? StreamDeck : null;
         }
 
-        return monitors.FirstOrDefault(m => string.Equals(m, binding, StringComparison.OrdinalIgnoreCase));
+        var exact = monitors.FirstOrDefault(m => string.Equals(m, binding, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        // A saved binding can outlive the exact spelling of a monitor's name:
+        // tidying "StudioDisplay" to "Studio Display" would otherwise orphan
+        // every dial already bound to it. Fall back to a spacing- and
+        // case-insensitive match so a rename of presentation alone keeps
+        // working, without matching two genuinely different monitors.
+        return monitors.FirstOrDefault(m => LooseEquals(m, binding));
+    }
+
+    /// <summary>Equal ignoring case and any spacing, so "StudioDisplay" matches "Studio Display".</summary>
+    private static bool LooseEquals(string a, string b)
+    {
+        int i = 0, j = 0;
+        while (true)
+        {
+            while (i < a.Length && a[i] == ' ') { i++; }
+            while (j < b.Length && b[j] == ' ') { j++; }
+            if (i == a.Length || j == b.Length)
+            {
+                return i == a.Length && j == b.Length;
+            }
+
+            if (char.ToUpperInvariant(a[i]) != char.ToUpperInvariant(b[j]))
+            {
+                return false;
+            }
+
+            i++;
+            j++;
+        }
     }
 
     /// <summary>The target after (+1) or before (-1) the binding in the list, wrapping. Null when there is nothing to move to.</summary>

@@ -23,6 +23,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
     private const string TapKey = "tapAction";
     private const string HoldKey = "holdAction";
     private const string IncludeStreamDeckKey = "includeStreamDeck";
+    private const string RenameKey = "renameTo";
     private const string GestureDim = "dim";
     private const string GestureNext = "next";
     private const string GesturePrevious = "previous";
@@ -133,7 +134,19 @@ public sealed class DisplayBrightnessAction : EncoderBase
             }
 
             var snapshot = DisplayBrightnessHub.Get(binding);
-            return snapshot.Available ? snapshot with { Index = Math.Max(0, index - 1), Count = count } : snapshot;
+            if (!snapshot.Available)
+            {
+                return snapshot;
+            }
+
+            // The override is cosmetic and applied here, at the edge: everything
+            // else keeps addressing the screen by the name the platform gave it.
+            return snapshot with
+            {
+                Name = DisplayNames.Resolve(snapshot.Name),
+                Index = Math.Max(0, index - 1),
+                Count = count,
+            };
         }
     }
 
@@ -236,6 +249,15 @@ public sealed class DisplayBrightnessAction : EncoderBase
         }
     }
 
+    /// <summary>
+    /// The platform name a target refers to, or null when the target is not a
+    /// monitor (the Stream Deck) or nothing is resolved. Custom names key off
+    /// this, never off the binding, so "automatic" renames the screen it
+    /// actually resolves to.
+    /// </summary>
+    private static string? ResolvedPlatformName(string? target) =>
+        string.IsNullOrEmpty(target) || target == DisplayTargets.StreamDeck ? null : target;
+
     /// <summary>Point this dial at a target and remember it in the action's settings.</summary>
     private void BindTo(string target)
     {
@@ -244,6 +266,9 @@ public sealed class DisplayBrightnessAction : EncoderBase
         {
             _binding = target;
             _settings[MonitorKey] = target;
+            // Keep the inspector's rename box pointed at the screen now shown,
+            // so renaming never lands on the screen the dial just left.
+            _settings[RenameKey] = DisplayNames.CustomFor(ResolvedPlatformName(target)) ?? "";
             settings = (JObject)_settings.DeepClone();
         }
 
@@ -328,11 +353,26 @@ public sealed class DisplayBrightnessAction : EncoderBase
             _settings = settings is null ? new JObject() : (JObject)settings.DeepClone();
             var monitor = SettingsReader.GetString(settings, MonitorKey, PropertyInspectorBridge.AutomaticValue);
             _binding = monitor == PropertyInspectorBridge.AutomaticValue ? DisplayTargets.Automatic : monitor;
-            _includeStreamDeck = SettingsReader.GetBool(settings, IncludeStreamDeckKey, fallback: true);
+            // The setting is honoured only where the deck's screen can actually be
+            // driven; elsewhere the deck never enters the cycle, so a profile
+            // synced from Windows cannot offer a target that does nothing.
+            _includeStreamDeck = BrightnessHub.IsSupported
+                && SettingsReader.GetBool(settings, IncludeStreamDeckKey, fallback: true);
             _stepPercent = int.Parse(SettingsReader.GetString(settings, StepKey, "2", Steps));
             _press = SettingsReader.GetString(settings, PressKey, GestureDim, Gestures);
             _tap = SettingsReader.GetString(settings, TapKey, GestureNext, Gestures);
             _hold = SettingsReader.GetString(settings, HoldKey, GesturePrevious, Gestures);
+        }
+
+        // A rename typed in the inspector applies to the screen this dial is
+        // showing. Written only when it differs from what is stored, so the
+        // settings echo that follows a save does not loop.
+        var renameTo = SettingsReader.GetString(settings, RenameKey, "").Trim();
+        var renameTarget = ResolvedPlatformName(ResolvedTarget());
+        if (renameTarget is not null && renameTo != (DisplayNames.CustomFor(renameTarget) ?? ""))
+        {
+            _ = DisplayNames.SetAsync(Connection, renameTarget, renameTo);
+            Push(Current, full: false);
         }
 
         if (writeBackDefaults && SettingsReader.IsMissingAny(settings, MonitorKey, IncludeStreamDeckKey, StepKey, PressKey, TapKey, HoldKey))
