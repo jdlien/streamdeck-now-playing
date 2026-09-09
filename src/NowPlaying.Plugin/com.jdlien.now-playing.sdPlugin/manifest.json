@@ -10,6 +10,8 @@
   "Category": "Now Playing",
   "CategoryIcon": "imgs/plugin/category-icon",
   "CodePath": "bin/NowPlaying.exe",
+  "CodePathWin": "bin/NowPlaying.exe",
+  "CodePathMac": "bin/mac/NowPlaying",
   "SDKVersion": 2,
   "Software": {
     "MinimumVersion": "7.1"
@@ -18,6 +20,10 @@
     {
       "Platform": "windows",
       "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "14"
     }
   ],
   "Actions": [
@@ -25,8 +31,16 @@
       "UUID": "com.jdlien.now-playing.dial",
       "Name": "Now Playing",
       "Tooltip": "Shows the current track on the touch strip. Turn for next or previous track, press or tap for play/pause.",
+      "OS": [
+        {
+          "Platform": "windows",
+          "MinimumVersion": "10"
+        }
+      ],
       "Icon": "imgs/actions/now-playing/icon",
-      "Controllers": [ "Encoder" ],
+      "Controllers": [
+        "Encoder"
+      ],
       "PropertyInspectorPath": "pi/dial.html",
       "Encoder": {
         "layout": "layouts/now-playing.json",
@@ -48,8 +62,16 @@
       "UUID": "com.jdlien.now-playing.key",
       "Name": "Now Playing Key",
       "Tooltip": "Album art, title, and play state on a key. Press for play/pause, hold for next track; both configurable.",
+      "OS": [
+        {
+          "Platform": "windows",
+          "MinimumVersion": "10"
+        }
+      ],
       "Icon": "imgs/actions/now-playing-key/icon",
-      "Controllers": [ "Keypad" ],
+      "Controllers": [
+        "Keypad"
+      ],
       "PropertyInspectorPath": "pi/key.html",
       "States": [
         {
@@ -64,7 +86,9 @@
       "Name": "Volume",
       "Tooltip": "System volume on the touch strip, in the same layout as Now Playing. Turn to adjust, press or tap to mute.",
       "Icon": "imgs/actions/volume/icon",
-      "Controllers": [ "Encoder" ],
+      "Controllers": [
+        "Encoder"
+      ],
       "PropertyInspectorPath": "pi/volume.html",
       "Encoder": {
         "layout": "layouts/volume.json",
@@ -86,8 +110,16 @@
       "UUID": "com.jdlien.now-playing.brightness",
       "Name": "SD Brightness",
       "Tooltip": "Stream Deck screen brightness on the touch strip, in the same layout. Turn to adjust, press or tap to dim and restore.",
+      "OS": [
+        {
+          "Platform": "windows",
+          "MinimumVersion": "10"
+        }
+      ],
       "Icon": "imgs/actions/brightness/icon",
-      "Controllers": [ "Encoder" ],
+      "Controllers": [
+        "Encoder"
+      ],
       "PropertyInspectorPath": "pi/brightness.html",
       "Encoder": {
         "layout": "layouts/brightness.json",
@@ -110,7 +142,9 @@
       "Name": "Display Brightness",
       "Tooltip": "Brightness of a monitor (over DDC/CI) or of the Stream Deck itself, in the same layout. Each dial picks its own screen and can cycle through all of them. Turn to adjust; press, tap, and hold are configurable.",
       "Icon": "imgs/actions/display-brightness/icon",
-      "Controllers": [ "Encoder" ],
+      "Controllers": [
+        "Encoder"
+      ],
       "PropertyInspectorPath": "pi/display-brightness.html",
       "Encoder": {
         "layout": "layouts/display-brightness.json",

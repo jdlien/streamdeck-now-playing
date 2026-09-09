@@ -290,13 +290,12 @@ public static class ArtRenderer
     }
 
     /// <summary>
-    /// Segoe UI at the requested weight, or a system face that has the glyphs
-    /// when the text needs a script Segoe UI lacks.
+    /// The platform's UI face at the requested weight, or a system face that
+    /// has the glyphs when the text needs a script that face lacks.
     /// </summary>
     private static SKFont MakeFont(float size, SKFontStyleWeight weight, string sample)
     {
-        var typeface = SKTypeface.FromFamilyName("Segoe UI", weight, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright)
-            ?? SKTypeface.Default;
+        var typeface = UiTypeface(weight);
 
         if (sample.Length > 0 && !typeface.ContainsGlyphs(sample))
         {
@@ -319,6 +318,31 @@ public static class ArtRenderer
 
         return new SKFont(typeface, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias };
     }
+
+    /// <summary>
+    /// The host's UI face. Asking for "Segoe UI" on macOS does not fail, it
+    /// silently resolves to Helvetica, so the family is chosen per platform.
+    /// The macOS system font is only reachable by its internal name; the
+    /// public "SF Pro Text" is tried first in case it is installed.
+    /// </summary>
+    private static SKTypeface UiTypeface(SKFontStyleWeight weight)
+    {
+        foreach (var family in UiFontFamilies)
+        {
+            var candidate = SKTypeface.FromFamilyName(family, weight, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright);
+            if (candidate is not null && string.Equals(candidate.FamilyName, family, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+
+        return SKTypeface.Default;
+    }
+
+    private static readonly string[] UiFontFamilies =
+        OperatingSystem.IsMacOS()
+            ? ["SF Pro Text", ".AppleSystemUIFont", "Helvetica Neue"]
+            : ["Segoe UI"];
 
     private static float LineHeight(SKFont font) => (font.Metrics.Descent - font.Metrics.Ascent) * 1.02f;
 
