@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    .NET runs a JIT, so the hardened runtime has to allow writable-executable
+    memory. Without these the process is killed at startup by the kernel, not
+    by Gatekeeper, and the only symptom is the Stream Deck app reporting that
+    the plugin never connected.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!--
+    The runtime loads its own dylibs, which are signed by us rather than by
+    Apple and are not in the app's bundle structure.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

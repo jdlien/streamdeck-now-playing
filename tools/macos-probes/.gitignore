@@ -1,0 +1,8 @@
+# Build products of the probe programs; rebuild with the commands in each source file.
+hid-coexist
+hid-all
+display-write
+mrhost
+*.dylib
+*.dSYM/
+*.wav

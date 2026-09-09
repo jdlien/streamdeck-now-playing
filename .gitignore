@@ -8,10 +8,18 @@ obj/
 src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/bin/
 src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/logs/
 src/NowPlaying.Plugin/com.jdlien.now-playing.sdPlugin/*.log
-# Packaged plugin
+# Packaged plugin and its 100MB staging tree
 *.streamDeckPlugin
+build/stage/
+build/notarize.zip
 # Node (Elgato CLI leftovers, if any)
 node_modules/
 # OS
 Thumbs.db
 .DS_Store
+
+# Credentials. The notarization password normally lives only in the login
+# Keychain; .secrets/ is a fallback the setup script writes to if storing it
+# fails, so a one-time secrt link is not burned for nothing.
+.secrets/
+*.env
