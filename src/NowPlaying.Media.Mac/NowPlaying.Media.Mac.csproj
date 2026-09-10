@@ -33,7 +33,13 @@
     point.
   -->
   <PropertyGroup>
-    <MediaRemoteHelperDylib>$(IntermediateOutputPath)nowplaying-mediaremote.dylib</MediaRemoteHelperDylib>
+    <!--
+      BaseIntermediateOutputPath, not IntermediateOutputPath: the latter is set
+      by the SDK's closing import, which has not run when this PropertyGroup is
+      evaluated, so it was empty and the dylib was built into the project
+      directory, and got committed from there.
+    -->
+    <MediaRemoteHelperDylib>$(BaseIntermediateOutputPath)nowplaying-mediaremote.dylib</MediaRemoteHelperDylib>
     <BuildHelper Condition="'$([MSBuild]::IsOSPlatform(OSX))' == 'true'">true</BuildHelper>
   </PropertyGroup>
 
