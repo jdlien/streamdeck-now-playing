@@ -24,7 +24,7 @@ shaped revision 2.
 | M3 SD Brightness | **Cut** (S2), and the removal done: hidden by manifest, kept out of the Display Brightness cycle, and dropped from the property inspector on macOS. |
 | M4 Display Brightness | **Done, awaiting hardware test.** Both backends verified live on all three displays. |
 | M5 Packaging | **Done.** Notarization accepted; Gatekeeper reports `source=Notarized Developer ID`. S4 run: signed, hardened, self-contained builds launch correctly. `build/package-macos.sh` publishes, signs and packs. Notarization needs a stored credential (one command, below). |
-| M6 Now Playing | **Done and confirmed on the hardware.** MediaRemote via an Apple-signed host for breadth, AppleScript for Music.app, routed by owning bundle id. |
+| M6 Now Playing | **Done and confirmed on the hardware.** MediaRemote via an Apple-signed host for breadth, AppleScript as the fallback, routed by owning bundle id. See the correction under S1: the Music.app hang was a loader-lock deadlock in the helper. |
 
 Two faults worth remembering, both found by testing rather than review:
 
@@ -49,7 +49,7 @@ their own project rather than being deleted.
 
 | Spike | Outcome | Consequence |
 | --- | --- | --- |
-| **S1** MediaRemote via Apple-signed host | **PASS, with one exception** | Now Playing promoted from "conditional v0.7" to viable, event-driven, broad coverage. Music.app needs a fallback. |
+| **S1** MediaRemote via Apple-signed host | **PASS** | Now Playing promoted from "conditional v0.7" to viable, event-driven, broad coverage. The Music.app exception was our own deadlock and is fixed. |
 | **S2** HID coexistence | **FAIL — hard block** | SD Brightness action is **cut** on macOS. Deck target removed from Display Brightness. |
 | **S3** Display write | **PASS** | Both backends write and confirm. D6 validation proven necessary. |
 
@@ -93,6 +93,25 @@ both now baked into the design: every MediaRemote call needs a **timeout and mus
 never block a dial**, and Music.app needs the AppleScript adapter, which is the
 richest source for it anyway. `GetNowPlayingClient` works even for Music, so it
 is a reliable **router**: read the owning bundle ID first, then choose backend.
+
+> **Corrected 2026-09-10.** The hang was ours, not Apple's. The helper ran
+> `CFRunLoopRun()` from the dylib's constructor, and dyld holds its loader lock
+> for the whole of an initializer — so a constructor that never returns blocks
+> every `dlopen` in the process. Assembling Music's now-playing info decodes its
+> artwork, `MRArtwork setImageData:` → ImageIO → `IIO_ReaderHandler::buildPluginList`
+> → `dlopen`, which is exactly the call that could not proceed. That is why
+> QuickTime answered and Music did not: QuickTime's session carried no artwork to
+> decode. Once MediaRemote's queue was stuck there, every later `GetNowPlayingInfo`
+> and `GetPlaybackState` piled another blocked worker thread onto it until
+> libdispatch's 64-thread soft limit stopped the process outright — alive,
+> connected, and permanently silent, which is how the dial came to freeze on a
+> track for an hour with the helper apparently running. Diagnosed from `sample(1)`
+> on the live helper. The constructor now returns immediately and all work runs
+> on a queue of its own; MediaRemote answers for Music like everything else.
+>
+> Both consequences above still hold, and two more join them: the helper emits a
+> heartbeat so the plugin can tell a wedged process from a working one, and the
+> AppleScript adapter is now the **fallback** rather than Music's only route.
 
 **S2 [measured].** Exactly one Elgato HID collection exists
 (`usagePage=12 usage=1 feature=32 in=512 out=1024`), and

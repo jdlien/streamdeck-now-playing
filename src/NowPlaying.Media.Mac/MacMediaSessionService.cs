@@ -13,11 +13,16 @@ namespace NowPlaying.Media;
 /// </code>
 ///
 /// MediaRemote covers everything with no per-app work and pushes change
-/// notifications, so the Windows design's event-driven shape survives. It has
-/// one hole: it will not give up Music.app's metadata, and rather than failing
-/// it never calls back, so every call into it is bounded and Music is asked
-/// directly instead. The call that names the owning app answers even for Music,
-/// which is what makes the routing possible at all.
+/// notifications, so the Windows design's event-driven shape survives. It is
+/// the source for every app that it will describe, Music included.
+///
+/// The AppleScript branch is the fallback, taken when the helper says it has an
+/// owning app but no metadata for it, and whenever the helper is not answering
+/// at all. It was built because Music.app appeared to be a permanent case of
+/// the first kind; that turned out to be a deadlock in the helper rather than
+/// anything about Music, and it is kept because a provider that names an app
+/// without describing it is a real state, and because AppleScript is what
+/// remains if a future macOS closes MediaRemote off entirely.
 ///
 /// What is lost against Windows: this reports the session macOS has selected,
 /// not every session, so ranking across simultaneous players is the system's
@@ -195,7 +200,7 @@ public sealed class MacMediaSessionService : IMediaSessionService
             return ok;
         }
 
-        if (!_host.IsRunning)
+        if (!_host.IsHealthy)
         {
             return false;
         }
@@ -342,13 +347,17 @@ public sealed class MacMediaSessionService : IMediaSessionService
                 routed = _musicRouted;
             }
 
-            // If the helper is down, Music is the only thing left that can be
-            // asked. That covers a crash loop and, more importantly, the day an
-            // OS update takes MediaRemote away entirely: the sibling ak820-pro
-            // agent chose AppleScript precisely because Apple keeps restricting
-            // MediaRemote, so losing it should narrow this plugin rather than
-            // blank it.
-            if (!routed && !_host.IsRunning && MediaRemoteHost.HelperPath is not null)
+            // If the helper is not answering, Music is the only thing left that
+            // can be asked. That covers a crash loop and, more importantly, the
+            // day an OS update takes MediaRemote away entirely: the sibling
+            // ak820-pro agent chose AppleScript precisely because Apple keeps
+            // restricting MediaRemote, so losing it should narrow this plugin
+            // rather than blank it.
+            //
+            // IsHealthy, not IsRunning. A helper whose queues have deadlocked
+            // stays alive and silent, and asking whether the process exists said
+            // yes right up to the point the dial had been frozen for an hour.
+            if (!routed && !_host.IsHealthy && MediaRemoteHost.HelperPath is not null)
             {
                 routed = true;
                 lock (_gate)
@@ -416,7 +425,7 @@ public sealed class MacMediaSessionService : IMediaSessionService
                 _musicRouted = false;
             }
 
-            if (_host.IsRunning)
+            if (_host.IsHealthy)
             {
                 _host.Send("refresh");
             }

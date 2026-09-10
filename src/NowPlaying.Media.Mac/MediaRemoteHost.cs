@@ -29,9 +29,10 @@ internal sealed class LenientBooleanConverter : JsonConverter<bool>
 /// <summary>What the helper reports about the current session.</summary>
 /// <param name="Bundle">Bundle id of the app that owns the session, or null when nothing does.</param>
 /// <param name="Stale">
-/// The provider named an owning app but would not give up its metadata. Music.app
-/// does this: the client and playing-state calls answer, the metadata call never
-/// calls back at all. The router treats it as "ask that app directly".
+/// The provider named an owning app but would not give up its metadata: the
+/// client and playing-state calls answer, the metadata call does not come back.
+/// The router treats it as "ask that app directly". Music.app used to be a
+/// standing example and no longer is; see the helper's header for why.
 /// </param>
 internal sealed record MediaRemoteState(
     [property: JsonPropertyName("bundle")] string? Bundle,
@@ -66,6 +67,19 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
     private static readonly TimeSpan RestartDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxRestartDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// How long the helper may say nothing before it is presumed wedged. It
+    /// ticks every 15 s, so four missed ticks. Generous on purpose: killing a
+    /// healthy helper costs a reconnect and a re-read, and the fallback to
+    /// Music covers the gap either way.
+    /// </summary>
+    internal static readonly TimeSpan SilenceLimit = TimeSpan.FromSeconds(60);
+
+    private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(10);
+
+    /// <summary>A run shorter than this is a failing run; do not clear the backoff.</summary>
+    private static readonly TimeSpan HealthyRun = TimeSpan.FromMinutes(2);
+
     private readonly Action<string>? _log;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly object _gate = new();
@@ -73,6 +87,7 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
     private Process? _process;
     private Task? _supervisor;
     private TimeSpan _restartDelay = RestartDelay;
+    private long _lastMessageTicks = DateTime.UtcNow.Ticks;
 
     public MediaRemoteHost(Action<string>? log = null) => _log = log;
 
@@ -93,6 +108,22 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Whether the helper is up <em>and answering</em>.
+    ///
+    /// Not the same question as <see cref="IsRunning"/>, and the difference is
+    /// the whole point: MediaRemote can wedge the helper's queues while the
+    /// process stays alive, connected and silent forever. Callers deciding
+    /// whether MediaRemote can still be relied on want this one.
+    /// </summary>
+    public bool IsHealthy => IsAnswering(
+        IsRunning,
+        TimeSpan.FromTicks(DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMessageTicks)));
+
+    /// <summary>The rule behind <see cref="IsHealthy"/>, without a clock.</summary>
+    internal static bool IsAnswering(bool running, TimeSpan silence) =>
+        running && silence < SilenceLimit;
 
     /// <summary>The helper next to this assembly, or null when it was not deployed.</summary>
     public static string? HelperPath
@@ -154,10 +185,17 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
 
         while (!_cancellation.IsCancellationRequested)
         {
+            var startedAt = DateTimeOffset.UtcNow;
             try
             {
                 await RunOnceAsync(helper).ConfigureAwait(false);
-                _restartDelay = RestartDelay;   // it ran; treat the next failure as fresh
+                // Only a run that lasted counts as a good one. A helper that
+                // wedges immediately would otherwise reset the backoff every
+                // time the watchdog killed it and restart in a tight loop.
+                if (DateTimeOffset.UtcNow - startedAt >= HealthyRun)
+                {
+                    _restartDelay = RestartDelay;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -189,8 +227,18 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
     private async Task RunOnceAsync(string helperPath)
     {
         // Perl's DynaLoader runs the dylib's constructor on load; 0x01 is RTLD_LAZY.
-        // Nothing else is asked of the host process.
-        var loader = $"use DynaLoader; DynaLoader::dl_load_file('{helperPath.Replace("'", "\\'")}', 0x01);";
+        //
+        // The sleep is what keeps the host alive. The constructor returns
+        // immediately and hands its work to a queue of its own, because dyld
+        // holds the loader lock for the whole of an initializer and a
+        // constructor that never returns deadlocks every dlopen in the process
+        // -- including the one ImageIO does, lazily, the first time MediaRemote
+        // decodes artwork. So the helper cannot block here, and perl blocks
+        // instead. The loop is for the signal case: sleep returns early when one
+        // arrives.
+        var quoted = helperPath.Replace("'", "\\'");
+        var loader = $"use DynaLoader; die \"load failed\\n\" unless " +
+                     $"DynaLoader::dl_load_file('{quoted}', 0x01); sleep 3600 while 1;";
         var startInfo = new ProcessStartInfo(PerlPath)
         {
             RedirectStandardInput = true,
@@ -219,6 +267,10 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             }
         });
 
+        Interlocked.Exchange(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
+        using var run = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token);
+        var watchdog = Task.Run(() => WatchAsync(process, run.Token));
+
         try
         {
             while (!_cancellation.IsCancellationRequested)
@@ -234,6 +286,15 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         }
         finally
         {
+            await run.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await watchdog.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
             lock (_gate)
             {
                 _process = null;
@@ -253,6 +314,51 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Kill a helper that has stopped answering.
+    ///
+    /// Exiting is not the failure this guards against -- the supervisor already
+    /// restarts an exited helper. The failure is the process that stays up and
+    /// goes quiet, which is what a deadlock inside MediaRemote looks like from
+    /// out here. Killing it turns that into an exit, which is recoverable.
+    /// </summary>
+    private async Task WatchAsync(Process process, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(HealthCheckInterval, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            var silence = TimeSpan.FromTicks(DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMessageTicks));
+            if (silence < SilenceLimit)
+            {
+                continue;
+            }
+
+            _log?.Invoke($"helper has said nothing for {silence.TotalSeconds:0}s; restarting it");
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            return;
+        }
+    }
+
     private void Handle(string line)
     {
         JsonElement root;
@@ -266,9 +372,15 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             return;
         }
 
+        // Any line at all is proof the helper's queue is still draining.
+        Interlocked.Exchange(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
+
         var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
         switch (type)
         {
+            case "tick":
+                break;   // liveness only; recorded above
+
             case "hello":
                 _log?.Invoke($"helper up (pid {(root.TryGetProperty("pid", out var pid) ? pid.GetRawText() : "?")})");
                 break;

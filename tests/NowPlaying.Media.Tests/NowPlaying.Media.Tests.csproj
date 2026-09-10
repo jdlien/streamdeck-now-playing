@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\NowPlaying.Media\NowPlaying.Media.csproj" />
     <ProjectReference Include="..\..\src\NowPlaying.Plugin\NowPlaying.Plugin.csproj" />
     <ProjectReference Include="..\..\src\NowPlaying.Device.Mac\NowPlaying.Device.Mac.csproj" />
+    <ProjectReference Include="..\..\src\NowPlaying.Media.Mac\NowPlaying.Media.Mac.csproj" />
   </ItemGroup>
 
 </Project>

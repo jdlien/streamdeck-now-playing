@@ -23,6 +23,10 @@
     <ProjectReference Include="..\NowPlaying.Media\NowPlaying.Media.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NowPlaying.Media.Tests" />
+  </ItemGroup>
+
   <!--
     Built from source rather than committed as a binary, so it can be read and
     audited with the rest of the project. Only on macOS: everywhere else the

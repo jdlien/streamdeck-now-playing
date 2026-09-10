@@ -5,9 +5,9 @@ namespace NowPlaying.Media;
 /// <summary>
 /// Why a read produced no state. The distinction matters: "Music says it is
 /// stopped" means hand the session back, while "Music did not answer" must not,
-/// because dropping the route on a slow query blanks the display and nothing
-/// restores it -- the helper cannot report Music's metadata, so it emits an
-/// identical line for every track and never prompts a re-route.
+/// because dropping the route on a slow query blanks the display and there may
+/// be nothing left to restore it -- if the helper is the reason this adapter is
+/// being used, it will not be volunteering a snapshot either.
 /// </summary>
 internal enum MusicReadStatus
 {
@@ -44,11 +44,13 @@ internal sealed record MusicState(
 /// <summary>
 /// Music.app over AppleScript.
 ///
-/// Needed because MediaRemote will not give up Music's metadata: with Music
-/// owning the session, the client and playing-state calls answer but
-/// <c>MRMediaRemoteGetNowPlayingInfo</c> never calls back at all, measured out
-/// to thirty seconds. Music's scripting dictionary has everything the snapshot
-/// needs, so the router asks it directly.
+/// The fallback for when MediaRemote names Music as the owning app but will not
+/// describe what it is playing, and for when the helper is not answering at
+/// all. It was written because that first case looked permanent: the metadata
+/// call was measured hanging out to thirty seconds. The cause was a deadlock in
+/// the helper, not in Music, and MediaRemote now answers for it -- but Music's
+/// scripting dictionary has everything the snapshot needs, and it is the one
+/// source here that does not depend on a private framework, so it stays.
 ///
 /// Two rules everything here follows. Queries are bounded, because an
 /// unresponsive app would otherwise hang whatever called it. And nothing may
