@@ -1011,11 +1011,33 @@ can still return noise: a Studio Display's bus returned a frame that parses
 naively as "brightness 158". The recorded frame is a test case.
 
 The Windows build's periodic DDC read stops monitors from ever staying asleep.
-That is not inherited: backends declare whether a read costs a bus
-transaction, DDC displays are never polled while idle, and every transaction is
-gated on `CGDisplayIsAsleep`. Apple displays answer locally, so they are still
-polled and additionally report brightness changed by anything else, which the
-strip follows.
+That is not inherited, and it is the constraint everything here is built
+around: backends declare whether a read costs a bus transaction, and every one
+is gated on `CGDisplayIsAsleep`. A sleeping panel is never touched — nobody can
+change its brightness while it sleeps, so there is nothing to miss by leaving
+it alone.
+
+Awake, both kinds follow a change made anywhere else — the keyboard keys,
+System Settings, the monitor's own buttons, another utility. Apple panels
+announce their own through
+`DisplayServicesRegisterForBrightnessChangeNotifications` and so are re-read
+only as a backstop, every 30 s. DDC/CI announces nothing at all, so those are
+polled every 5 s, which is the only way that change can ever reach the strip. A
+display that stops answering — switched off at the monitor, or to another
+input — drops to a minute between attempts rather than keeping a dead bus
+busy.
+
+Two things about that registration are easy to get wrong, and both were.
+DisplayServices keys it by `(display, context)`, and the callback's second
+argument is the **context**, not the display id — registering display 3 under
+context 5555 calls back with `(0, 5555)`. Passing each display's own id as its
+context is therefore the only thing that makes the callback say which display
+it is about. And the registration belongs to the service, not to the per-display
+worker: a rebind builds replacement workers before retiring the old ones, so
+while each worker registered and unregistered for itself, the retired one
+cancelled its replacement's registration. Apple panels silently stopped
+following external changes from the first rebind — every wake, every display
+reconfiguration — and looked fine again after a restart.
 
 ### 14.5 SD Brightness cannot ship on macOS
 

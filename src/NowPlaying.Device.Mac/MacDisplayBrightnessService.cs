@@ -27,11 +27,45 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     private static readonly TimeSpan QuietAfterWrite = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// How often a display whose reads are free is re-read, to notice
-    /// brightness changed elsewhere. Displays whose reads cost an I2C round
-    /// trip are never polled: see <see cref="Channel.RunAsync"/>.
+    /// How often a display whose reads are free is re-read. Apple panels report
+    /// their own changes, so this is only a backstop for a missed notification.
     /// </summary>
     private static readonly TimeSpan IdleWake = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How often a DDC/CI display is re-read to notice a change made elsewhere:
+    /// its own buttons, another utility, anything that is not this plugin. DDC
+    /// has no notification of any kind, so polling is the only way to see one.
+    ///
+    /// Frequent enough to feel current when glancing at the strip, and only ever
+    /// while the panel is awake. Polling a sleeping one is what kept monitors
+    /// from staying asleep on Windows, and that rule has not changed.
+    /// </summary>
+    private static readonly TimeSpan DdcPoll = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Poll interval after a display stops answering, which usually means it was
+    /// switched off at the monitor or to another input. There is no point asking
+    /// at the normal rate, and each attempt costs a bus timeout.
+    /// </summary>
+    private static readonly TimeSpan DdcBackoff = TimeSpan.FromSeconds(60);
+
+    /// <summary>Unanswered polls before backing off.</summary>
+    private const int QuietPollsBeforeBackoff = 3;
+
+    /// <summary>
+    /// How long a display is left alone before it is re-read.
+    /// </summary>
+    /// <param name="readCostsABusTransaction">
+    /// True for DDC/CI. Such a display has no way to announce a change, so the
+    /// poll is the only way to see one; a display that answers locally announces
+    /// its own changes and needs nothing more than a backstop.
+    /// </param>
+    /// <param name="quietPolls">Consecutive polls the display did not answer.</param>
+    internal static TimeSpan PollInterval(bool readCostsABusTransaction, int quietPolls) =>
+        !readCostsABusTransaction ? IdleWake
+        : quietPolls >= QuietPollsBeforeBackoff ? DdcBackoff
+        : DdcPoll;
 
     private readonly Action<string>? _log;
     private readonly object _gate = new();
@@ -45,13 +79,31 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     /// </summary>
     private readonly NativeMethods.BrightnessChangeCallback _onBrightnessChanged;
 
+    /// <summary>
+    /// Displays currently registered for brightness-change notifications.
+    ///
+    /// Deliberately owned here and not by the channels. A registration is keyed
+    /// by (display, context) inside DisplayServices, and a rebind builds new
+    /// channels for the same displays before retiring the old ones -- so when
+    /// each channel registered on construction and unregistered on disposal,
+    /// the retired channel's unregister cancelled the replacement's
+    /// registration, both of them naming the same pair. Apple displays then
+    /// silently stopped following changes made anywhere else, from the first
+    /// rebind until the plugin was restarted, and a rebind happens on every
+    /// wake and every display reconfiguration. Keeping the set here means a
+    /// rebind that finds the same displays does nothing at all.
+    /// </summary>
+    private readonly HashSet<uint> _observedDisplays = [];
+
     private bool _started;
     private bool _disposed;
 
     public MacDisplayBrightnessService(Action<string>? log = null)
     {
         _log = log;
-        _onBrightnessChanged = (_, display, _, _) => ExternalBrightnessChanged(display);
+        // The callback's second argument is the registration context, which is
+        // always this display's own id: see BrightnessChangeCallback.
+        _onBrightnessChanged = (_, context, _, _) => PublishExternal(context, known: null);
         _onDisplaysChanged = (_, flags, _) =>
         {
             // Ignore the "about to change" half of each notification.
@@ -181,12 +233,18 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     }
 
     /// <summary>
-    /// Someone else moved an Apple display's brightness. Re-read and publish so
-    /// the dial matches what the screen is actually doing. Our own writes also
-    /// land here; they are ignored briefly afterwards so a dial being turned is
-    /// not fought by the echo of its own change.
+    /// Someone else moved a display's brightness. Publish it so the dial matches
+    /// what the screen is actually doing. Our own writes also land here; they are
+    /// ignored briefly afterwards so a dial being turned is not fought by the
+    /// echo of its own change.
     /// </summary>
-    private void ExternalBrightnessChanged(uint displayId)
+    /// <param name="displayId">The display that changed.</param>
+    /// <param name="known">
+    /// The level, when the caller has already read it. Apple panels announce the
+    /// change without saying what to, so that path passes null and reads; a DDC
+    /// poll has the number in hand and must not pay for a second bus round trip.
+    /// </param>
+    private void PublishExternal(uint displayId, int? known)
     {
         Channel? channel;
         int index, count;
@@ -202,7 +260,7 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             count = _channels.Count;
         }
 
-        var level = channel.ReadPercent();
+        var level = known ?? channel.ReadPercent();
         if (level is null)
         {
             return;
@@ -220,8 +278,60 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             published = channel.Snapshot with { Index = index, Count = count };
         }
 
+        _log?.Invoke($"{channel.Name}: changed elsewhere, now {level.Value}%");
         Changed?.Invoke(channel.Name, published);
     }
+
+    /// <summary>
+    /// Register the displays that announce their own brightness changes, and
+    /// drop the ones that have gone away. The display id doubles as the
+    /// registration context, which is what lets the callback say which display
+    /// it is about: see <see cref="NativeMethods.BrightnessChangeCallback"/>.
+    /// </summary>
+    private void SyncBrightnessObservers(List<Channel> channels)
+    {
+        var wanted = channels.Where(c => c.AnnouncesOwnChanges).Select(c => c.DisplayId).ToHashSet();
+
+        uint[] stale, fresh;
+        lock (_gate)
+        {
+            (fresh, stale) = ObserverChanges(wanted, _observedDisplays);
+        }
+
+        foreach (var display in stale)
+        {
+            NativeMethods.DisplayServicesUnregisterForBrightnessChangeNotifications.Value?.Invoke(display, display);
+            lock (_gate)
+            {
+                _observedDisplays.Remove(display);
+            }
+        }
+
+        var register = NativeMethods.DisplayServicesRegisterForBrightnessChangeNotifications.Value;
+        foreach (var display in fresh)
+        {
+            if (register?.Invoke(display, display, _onBrightnessChanged) != 0)
+            {
+                _log?.Invoke($"display {display} refused a brightness-change registration; " +
+                             "changes made elsewhere on it will not show up");
+                continue;
+            }
+
+            lock (_gate)
+            {
+                _observedDisplays.Add(display);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Which registrations to add and which to drop. Pure, because the property
+    /// that matters is a negative one: a rebind that finds the same displays
+    /// must produce neither, or it cancels its own registrations.
+    /// </summary>
+    internal static (uint[] Register, uint[] Unregister) ObserverChanges(
+        IReadOnlyCollection<uint> wanted, IReadOnlyCollection<uint> observed) =>
+        ([.. wanted.Except(observed)], [.. observed.Except(wanted)]);
 
     private Channel? Find(string? name)
     {
@@ -284,26 +394,17 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             // The channel adopts the AV service, so it stays alive as long as the
             // backend can be asked to write to it.
             var adopted = backend is DdcBrightnessBackend ? display.AvService : IntPtr.Zero;
-            var channel = new Channel(display.Name, display.DisplayId, backend, adopted, _log)
+            var channel = new Channel(display.Name, display.DisplayId, backend, adopted,
+                                      (id, level) => PublishExternal(id, level), _log)
             {
                 Snapshot = new DisplayBrightnessSnapshot(display.Name, level, wasDimmed, true),
             };
             adoptedServices.Add(adopted);
             built.Add(channel);
-            // Apple panels report brightness changes made by anyone -- the
-            // keyboard keys, System Settings, another utility -- so the strip
-            // can follow them. DDC monitors have no equivalent signal, which is
-            // why a change made elsewhere on those is not noticed until a rebind.
-            if (!backend.ReadDisturbsDisplay)
-            {
-                var register = NativeMethods.DisplayServicesRegisterForBrightnessChangeNotifications.Value;
-                if (register?.Invoke(display.DisplayId, display.DisplayId, _onBrightnessChanged) == 0)
-                {
-                    channel.ObservesExternalChanges = true;
-                }
-            }
 
-            _log?.Invoke($"{display.Name}: {backend.Kind}, read {reading.Value}%{(wasDimmed ? $", dimmed (restores to {level}%)" : "")}");
+            _log?.Invoke($"{display.Name}: {backend.Kind}, read {reading.Value}%" +
+                         $"{(wasDimmed ? $", dimmed (restores to {level}%)" : "")}" +
+                         $"{(backend.ReadDisturbsDisplay ? $", polled every {DdcPoll.TotalSeconds:0}s while awake" : ", follows external changes")}");
         }
 
         List<Channel> retired;
@@ -313,6 +414,8 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             _channels.Clear();
             _channels.AddRange(built);
         }
+
+        SyncBrightnessObservers(built);
 
         foreach (var channel in retired)
         {
@@ -346,6 +449,7 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         }
 
         NativeMethods.CGDisplayRemoveReconfigurationCallback(_onDisplaysChanged, IntPtr.Zero);
+        SyncBrightnessObservers([]);
         foreach (var channel in channels)
         {
             channel.Dispose();
@@ -370,13 +474,17 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
 
         private readonly IntPtr _ownedAvService;
         private readonly uint _displayId;
+        private readonly Action<uint, int>? _observed;
+        private int _quietPolls;
 
-        public Channel(string name, uint displayId, IMacBrightnessBackend backend, IntPtr ownedAvService, Action<string>? log)
+        public Channel(string name, uint displayId, IMacBrightnessBackend backend, IntPtr ownedAvService,
+                       Action<uint, int>? observed, Action<string>? log)
         {
             Name = name;
             _displayId = displayId;
             _backend = backend;
             _ownedAvService = ownedAvService;
+            _observed = observed;
             _log = log;
             _worker = Task.Run(RunAsync);
         }
@@ -385,8 +493,12 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
 
         public uint DisplayId => _displayId;
 
-        /// <summary>Set once DisplayServices accepted a brightness-change registration for this display.</summary>
-        public bool ObservesExternalChanges { get; set; }
+        /// <summary>
+        /// Whether this display reports brightness changed by anyone. True for
+        /// Apple panels; DDC/CI has no such signal, which is what the poll is
+        /// for. Registration is the service's to hold, not this channel's.
+        /// </summary>
+        public bool AnnouncesOwnChanges => !_backend.ReadDisturbsDisplay;
 
         /// <summary>True just after our own write, so its echo is not mistaken for someone else's change.</summary>
         public bool WroteRecently => DateTimeOffset.UtcNow - _lastWrite < QuietAfterWrite;
@@ -411,6 +523,8 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             }
         }
 
+        private TimeSpan IdleInterval => PollInterval(_backend.ReadDisturbsDisplay, _quietPolls);
+
         private async Task RunAsync()
         {
             var token = _cancellation.Token;
@@ -418,7 +532,7 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             {
                 try
                 {
-                    await _wake.WaitAsync(IdleWake, token).ConfigureAwait(false);
+                    await _wake.WaitAsync(IdleInterval, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -449,21 +563,26 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
                     continue;
                 }
 
-                // Idle. Polling a display whose reads cost a bus transaction is
-                // what stops a monitor ever staying asleep, so those are never
-                // polled: their level is re-read on rebind, which a display
-                // reconfiguration or a wake already triggers.
-                if (_backend.ReadDisturbsDisplay || asleep)
+                // Idle: re-read, so a change made anywhere else reaches the
+                // strip. A sleeping panel is skipped -- reading a DDC display
+                // costs a bus transaction, and doing that on a schedule is what
+                // kept monitors from ever staying asleep on Windows. Asleep, its
+                // level cannot be changed by anyone either, so there is nothing
+                // to miss.
+                if (asleep || DateTimeOffset.UtcNow - _lastWrite < QuietAfterWrite)
                 {
                     continue;
                 }
 
-                if (DateTimeOffset.UtcNow - _lastWrite < QuietAfterWrite)
+                var level = _backend.ReadPercent();
+                if (level is null)
                 {
+                    _quietPolls++;
                     continue;
                 }
 
-                _ = _backend.ReadPercent();
+                _quietPolls = 0;
+                _observed?.Invoke(_displayId, level.Value);
             }
         }
 
@@ -477,11 +596,6 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             catch (AggregateException)
             {
                 // A worker stuck in a native call cannot be interrupted; let it go.
-            }
-
-            if (ObservesExternalChanges)
-            {
-                NativeMethods.DisplayServicesUnregisterForBrightnessChangeNotifications.Value?.Invoke(_displayId, _displayId);
             }
 
             _cancellation.Dispose();

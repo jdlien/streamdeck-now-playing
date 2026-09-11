@@ -142,11 +142,16 @@ internal static partial class NativeMethods
         new(() => Resolve<CanChangeBrightnessProc>(DisplayServicesHandle.Value, "DisplayServicesCanChangeBrightness"));
 
     /// <summary>
-    /// Fired when a display's brightness changes, whoever changed it. The
-    /// context argument comes back as zero in practice, so the display id is
-    /// the only identification to rely on.
+    /// Fired when a display's brightness changes, whoever changed it.
+    ///
+    /// The second argument is the <em>context</em> given at registration, not the
+    /// display id. Measured: registering display 3 under context 5555 calls back
+    /// with (0, 5555), and the first argument is always zero. Registering each
+    /// display under its own id as its context is therefore the only thing that
+    /// makes the callback say which display it is about, so the two are never
+    /// given different values here.
     /// </summary>
-    public delegate void BrightnessChangeCallback(uint context, uint display, IntPtr notification, IntPtr userInfo);
+    public delegate void BrightnessChangeCallback(uint reserved, uint context, IntPtr notification, IntPtr userInfo);
 
     public delegate int RegisterBrightnessProc(uint display, uint context, BrightnessChangeCallback callback);
 

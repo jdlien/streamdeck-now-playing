@@ -23,4 +23,8 @@
     <ProjectReference Include="..\NowPlaying.Device\NowPlaying.Device.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NowPlaying.Media.Tests" />
+  </ItemGroup>
+
 </Project>
