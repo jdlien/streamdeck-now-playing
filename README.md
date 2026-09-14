@@ -1027,6 +1027,22 @@ display that stops answering — switched off at the monitor, or to another
 input — drops to a minute between attempts rather than keeping a dead bus
 busy.
 
+A probe that fails has to be recoverable. Failing once used to drop the display
+for good: nothing re-probed it short of a display reconfiguration or a restart
+of the plugin, so a BenQ MA270S that missed its probe during a wake sat there
+switched on while the dial said "not connected", for hours. Two causes behind
+the one symptom. Every instance of the display action subscribed to the wake
+notification of its own, so three dials asked for three rebinds at the same
+instant — three sets of IOAVService handles onto one I2C bus, and three probes
+racing with no pacing clock shared between them; on this desk all three then
+failed. And a monitor's scaler is in any case least willing to answer in the
+moment the machine wakes. So rebind requests now coalesce into one, which also
+puts the probe a beat clear of the wake, and a display that still does not
+answer is asked again — after 2 s, then 5, 15, 30, and every minute after that,
+the same rate a channel gone quiet is polled at, and never against a sleeping
+panel. Reproducible by starting four services at once: three of the four probes
+fail, and all four have the monitor back within 25 s.
+
 Two things about that registration are easy to get wrong, and both were.
 DisplayServices keys it by `(display, context)`, and the callback's second
 argument is the **context**, not the display id — registering display 3 under

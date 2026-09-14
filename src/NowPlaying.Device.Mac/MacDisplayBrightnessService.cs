@@ -54,6 +54,44 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     private const int QuietPollsBeforeBackoff = 3;
 
     /// <summary>
+    /// How long a burst of refresh requests is allowed to collect before one
+    /// rebind serves all of them.
+    ///
+    /// Every instance of the display action subscribes to the wake
+    /// notification of its own, so a deck carrying three brightness dials
+    /// asked for three rebinds at the same instant: three enumerations, three
+    /// sets of IOAVService handles onto the same I2C bus, and three DDC probes
+    /// racing with no pacing clock shared between them. On this desk all three
+    /// then failed, and a display that fails its probe used to be dropped
+    /// outright. Settling first also moves the probe a moment clear of the wake
+    /// itself, which is when a monitor's scaler is least likely to answer.
+    /// </summary>
+    private static readonly TimeSpan RebindSettle = TimeSpan.FromMilliseconds(750);
+
+    /// <summary>
+    /// How long to wait before asking again for a display that enumerated but
+    /// whose brightness channel did not answer.
+    ///
+    /// A probe fails for two very different reasons and one delay has to suit
+    /// both. A monitor that is merely slow -- still bringing its scaler up
+    /// after a wake, or busy with someone else's transaction -- answers within
+    /// seconds, and waiting a minute to ask again leaves the dial saying "not
+    /// connected" about a screen that is plainly on. A monitor that is switched
+    /// off or showing another input will not answer for hours, and every
+    /// attempt costs a bus timeout. So: quickly at first, then settling to the
+    /// same rate a channel that has gone quiet is polled at.
+    /// </summary>
+    /// <param name="attempt">Consecutive retries so far, the first being 1.</param>
+    internal static TimeSpan RetryDelay(int attempt) => attempt switch
+    {
+        <= 1 => TimeSpan.FromSeconds(2),
+        2 => TimeSpan.FromSeconds(5),
+        3 => TimeSpan.FromSeconds(15),
+        4 => TimeSpan.FromSeconds(30),
+        _ => DdcBackoff,
+    };
+
+    /// <summary>
     /// How long a display is left alone before it is re-read.
     /// </summary>
     /// <param name="readCostsABusTransaction">
@@ -94,6 +132,19 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     /// rebind that finds the same displays does nothing at all.
     /// </summary>
     private readonly HashSet<uint> _observedDisplays = [];
+
+    /// <summary>
+    /// Guards the rebind scheduler only. Separate from <see cref="_gate"/>
+    /// because a rebind talks to hardware and must not hold the lock that the
+    /// dial's own reads and writes take.
+    /// </summary>
+    private readonly object _rebindGate = new();
+
+    private bool _rebinding;
+    private bool _rebindAgain;
+    private bool _rebindQueued;
+    private CancellationTokenSource? _retry;
+    private int _retryAttempt;
 
     private bool _started;
     private bool _disposed;
@@ -143,10 +194,98 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         }
 
         NativeMethods.CGDisplayRegisterReconfigurationCallback(_onDisplaysChanged, IntPtr.Zero);
-        Rebind();
+
+        // Synchronously, so the first action to appear has its monitors by the
+        // time it draws. Later requests all go through the settle window.
+        Pump();
     }
 
-    public void Refresh() => Task.Run(Rebind);
+    public void Refresh() => Schedule(RebindSettle);
+
+    /// <summary>
+    /// Ask for a rebind. Requests coalesce: a burst arriving together -- one
+    /// per display action on every wake, or the flurry of reconfiguration
+    /// callbacks as screens come back -- becomes a single rebind, and a request
+    /// that arrives while one is running queues exactly one more instead of
+    /// racing it onto the bus.
+    /// </summary>
+    private void Schedule(TimeSpan settle)
+    {
+        lock (_rebindGate)
+        {
+            if (_rebinding)
+            {
+                _rebindAgain = true;
+                return;
+            }
+
+            if (_rebindQueued)
+            {
+                return;
+            }
+
+            _rebindQueued = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            if (settle > TimeSpan.Zero)
+            {
+                await Task.Delay(settle).ConfigureAwait(false);
+            }
+
+            Pump();
+        });
+    }
+
+    /// <summary>
+    /// Run rebinds one at a time, then once more if one was asked for while
+    /// this was running. The exit decision is taken under the lock so a request
+    /// arriving as the last rebind finishes cannot be dropped.
+    /// </summary>
+    private void Pump()
+    {
+        lock (_rebindGate)
+        {
+            _rebindQueued = false;
+            if (_rebinding)
+            {
+                _rebindAgain = true;
+                return;
+            }
+
+            _rebinding = true;
+            _rebindAgain = false;
+        }
+
+        try
+        {
+            while (true)
+            {
+                Rebind();
+
+                lock (_rebindGate)
+                {
+                    if (!_rebindAgain)
+                    {
+                        _rebinding = false;
+                        return;
+                    }
+
+                    _rebindAgain = false;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (_rebindGate)
+            {
+                _rebinding = false;
+            }
+
+            _log?.Invoke($"rebind failed: {ex.Message}");
+        }
+    }
 
     public string? Resolve(string? name)
     {
@@ -345,7 +484,62 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             : _channels.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>Re-enumerate displays and re-probe backends. Off the input path: probing talks to hardware.</summary>
+    /// <summary>
+    /// The protocol that reaches this display right now, or null when none
+    /// does. Probing is the only way to tell them apart (macos-port-plan D5).
+    /// </summary>
+    /// <param name="display">The display to reach.</param>
+    /// <param name="log">
+    /// Where this attempt's failures go. Null on a retry that has settled into
+    /// waiting out a monitor which is simply switched off: the reason was said
+    /// once already, and a line a minute until the thing comes back would bury
+    /// everything else in the log.
+    /// </param>
+    private static IMacBrightnessBackend? ChooseBackend(MacDisplay display, Action<string>? log)
+    {
+        if (AppleBrightnessBackend.Supports(display.DisplayId))
+        {
+            return new AppleBrightnessBackend(display.DisplayId);
+        }
+
+        if (display.AvService == IntPtr.Zero)
+        {
+            log?.Invoke($"{display.Name}: no brightness channel (DisplayServices declined and it has no DDC bus)");
+            return null;
+        }
+
+        // A probe is an I2C round trip, and doing that to a sleeping monitor on
+        // a schedule is exactly what kept them from staying asleep on Windows.
+        // The retry picks the display up once it is awake.
+        if (NativeMethods.CGDisplayIsAsleep(display.DisplayId))
+        {
+            log?.Invoke($"{display.Name}: asleep, not probing");
+            return null;
+        }
+
+        var ddc = DdcBrightnessBackend.Probe(display.AvService, log);
+        if (ddc is null)
+        {
+            log?.Invoke($"{display.Name}: no brightness channel (neither DisplayServices nor DDC/CI answered)");
+        }
+
+        return ddc;
+    }
+
+    /// <summary>
+    /// Whether a retry at this attempt still says anything in the log. The
+    /// early ones are the interesting ones: they are what say whether a display
+    /// came back by itself after a wake. Once the schedule has settled to its
+    /// steady state the display is simply off, and there is nothing new to
+    /// report about it until it answers.
+    /// </summary>
+    internal static bool RetryIsLogged(int attempt) => RetryDelay(attempt) < DdcBackoff;
+
+    /// <summary>
+    /// Re-enumerate displays and re-probe backends. Off the input path: probing
+    /// talks to hardware. Only ever entered through <see cref="Pump"/>, which
+    /// keeps two of these from putting two probes on one I2C bus at once.
+    /// </summary>
     private void Rebind()
     {
         List<Channel> previous;
@@ -363,24 +557,23 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         var displays = MacDisplays.Enumerate(_log);
         var built = new List<Channel>();
         var adoptedServices = new HashSet<IntPtr>();
+        var unreachable = false;
 
         foreach (var display in displays)
         {
             // D5: probe once, off the input path, and keep whichever protocol answers.
-            IMacBrightnessBackend? backend = AppleBrightnessBackend.Supports(display.DisplayId)
-                ? new AppleBrightnessBackend(display.DisplayId)
-                : DdcBrightnessBackend.Probe(display.AvService, _log);
-
+            var backend = ChooseBackend(display, _log);
             if (backend is null)
             {
-                _log?.Invoke($"{display.Name}: no brightness channel (neither DisplayServices nor DDC/CI answered)");
+                unreachable = true;
                 continue;
             }
 
             var reading = backend.ReadPercent();
             if (reading is null)
             {
-                _log?.Invoke($"{display.Name}: {backend.Kind} answered the probe but not the read; skipping");
+                _log?.Invoke($"{display.Name}: {backend.Kind} answered the probe but not the read");
+                unreachable = true;
                 continue;
             }
 
@@ -431,6 +624,116 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         {
             Changed?.Invoke(built[i].Name, built[i].Snapshot with { Index = i, Count = built.Count });
         }
+
+        ScheduleRetry(unreachable);
+    }
+
+    /// <summary>
+    /// Arm -- or, when every display answered, disarm -- the retry for displays
+    /// that enumerated but produced no channel.
+    ///
+    /// Without this a display had exactly one chance. A DDC probe that failed
+    /// for a moment, which is the normal state of affairs for a few seconds
+    /// after a wake, dropped the monitor from the list until the next display
+    /// reconfiguration or a restart of the plugin: the dial said "not
+    /// connected" about a screen sitting there switched on.
+    /// </summary>
+    private void ScheduleRetry(bool needed)
+    {
+        CancellationToken token;
+        TimeSpan delay;
+        int attempt;
+        lock (_rebindGate)
+        {
+            _retry?.Cancel();
+            _retry?.Dispose();
+            _retry = null;
+
+            if (!needed)
+            {
+                _retryAttempt = 0;
+                return;
+            }
+
+            attempt = ++_retryAttempt;
+            delay = RetryDelay(attempt);
+            _retry = new CancellationTokenSource();
+            token = _retry.Token;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+            {
+                return; // superseded by a later rebind, or the service went away
+            }
+
+            RetryUnreachable(attempt);
+        });
+    }
+
+    /// <summary>
+    /// Probe again for the displays that have no channel, and rebind only once
+    /// one of them answers.
+    ///
+    /// Deliberately not a plain rebind. A rebind tears down and rebuilds every
+    /// channel, which for a monitor that is working costs another bus
+    /// transaction and a fresh round of events -- and the ordinary reason for a
+    /// display to have no channel is that it is switched off or on another
+    /// input, a state that can last for days.
+    /// </summary>
+    /// <param name="attempt">Which consecutive retry this is, for the log.</param>
+    private void RetryUnreachable(int attempt)
+    {
+        var log = RetryIsLogged(attempt) ? _log : null;
+        HashSet<string> bound;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            bound = new HashSet<string>(_channels.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+        }
+
+        var displays = MacDisplays.Enumerate(log);
+        var answered = false;
+        var stillUnreachable = false;
+        try
+        {
+            foreach (var display in displays.Where(d => !bound.Contains(d.Name)))
+            {
+                if (ChooseBackend(display, log) is null)
+                {
+                    stillUnreachable = true;
+                    continue;
+                }
+
+                _log?.Invoke($"{display.Name}: answering again");
+                answered = true;
+                break;
+            }
+        }
+        finally
+        {
+            // Nothing here is adopted: the probe's backend is thrown away and
+            // the rebind that follows makes its own services.
+            MacDisplays.Release(displays);
+        }
+
+        if (answered)
+        {
+            Schedule(TimeSpan.Zero);
+        }
+        else
+        {
+            ScheduleRetry(stillUnreachable);
+        }
     }
 
     public void Dispose()
@@ -448,6 +751,7 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
             _channels.Clear();
         }
 
+        ScheduleRetry(needed: false);
         NativeMethods.CGDisplayRemoveReconfigurationCallback(_onDisplaysChanged, IntPtr.Zero);
         SyncBrightnessObservers([]);
         foreach (var channel in channels)
