@@ -46,5 +46,47 @@ public static class DisplayNameNormalizer
         return trimmed;
     }
 
+    /// <summary>
+    /// Makes every name in the list unique, since the name is the key the rest
+    /// of the plugin binds dials and custom names to. Two Studio Displays of
+    /// different generations both report "Studio Display", and without this
+    /// they are one monitor as far as every dial is concerned.
+    ///
+    /// Only names that collide are touched, so a lone monitor keeps its plain
+    /// name and existing bindings to it survive. A colliding name gets the last
+    /// four digits of its EDID serial: stable across reboots and re-cabling,
+    /// unlike a display id or a position. When that is not enough (no serial, or
+    /// serials ending alike) a position number is added as a last resort.
+    /// </summary>
+    public static IReadOnlyList<string> Disambiguate(IReadOnlyList<(string Name, uint Serial)> displays)
+    {
+        var result = displays.Select(d => d.Name).ToArray();
+        foreach (var group in displays.Select((d, i) => (d, i)).GroupBy(x => Squashed(x.d.Name), StringComparer.OrdinalIgnoreCase))
+        {
+            var members = group.ToList();
+            if (members.Count < 2)
+            {
+                continue;
+            }
+
+            foreach (var (d, i) in members)
+            {
+                result[i] = d.Serial == 0 ? d.Name : $"{d.Name} ({d.Serial % 10000:D4})";
+            }
+        }
+
+        var seen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < result.Length; i++)
+        {
+            seen[result[i]] = seen.GetValueOrDefault(result[i]) + 1;
+            if (seen[result[i]] > 1)
+            {
+                result[i] = $"{result[i]} #{seen[result[i]]}";
+            }
+        }
+
+        return result;
+    }
+
     private static string Squashed(string value) => value.Replace(" ", "");
 }

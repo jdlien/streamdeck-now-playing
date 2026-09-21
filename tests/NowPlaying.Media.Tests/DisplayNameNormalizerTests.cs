@@ -69,4 +69,25 @@ public class DisplayNamesTests
         });
         Assert.Equal("BenQ MA270S", DisplayNames.Resolve("BenQ MA270S"));
     }
+
+    [Fact]
+    public void IdenticalNamesGetTheirSerialSuffix()
+    {
+        var names = DisplayNameNormalizer.Disambiguate(
+            [("Studio Display XDR", 124421315u), ("Studio Display", 763926578u), ("Studio Display", 1171739599u)]);
+
+        Assert.Equal(["Studio Display XDR", "Studio Display (6578)", "Studio Display (9599)"], names);
+    }
+
+    [Fact]
+    public void ALoneNameIsLeftAlone() =>
+        Assert.Equal(["BenQ MA270S"], DisplayNameNormalizer.Disambiguate([("BenQ MA270S", 5u)]));
+
+    [Fact]
+    public void DuplicatesWithNoUsableSerialStillEndUpUnique()
+    {
+        var names = DisplayNameNormalizer.Disambiguate([("Studio Display", 0u), ("Studio Display", 0u)]);
+
+        Assert.Equal(2, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
 }

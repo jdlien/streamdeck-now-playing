@@ -71,6 +71,11 @@ internal static class MacDisplays
             displays.Add(new MacDisplay(id, name, NativeMethods.CGDisplayIsMain(id), vendor, product, serial, av));
         }
 
+        // The name is the key everything else binds to, so identical models
+        // (a 2022 and a 2026 Studio Display) must not share one.
+        var unique = DisplayNameNormalizer.Disambiguate([.. displays.Select(d => (d.Name, d.SerialNumber))]);
+        displays = [.. displays.Select((d, i) => d with { Name = unique[i] })];
+
         // Main display first, matching the Windows service's primary-first order.
         return [.. displays.OrderByDescending(d => d.IsMain).ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)];
     }
