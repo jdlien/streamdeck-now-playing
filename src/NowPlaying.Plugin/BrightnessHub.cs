@@ -43,7 +43,7 @@ internal static class BrightnessHub
             service.Changed += (state, applied) =>
             {
                 Logger.Instance.LogMessage(TracingLevel.INFO, $"[brightness] {state.Effective}% ({(state.Dimmed ? "dimmed" : "on")}, level {state.Level}) -> {applied} device(s)");
-                Changed?.Invoke(state);
+                Guard.Raise(Changed, state, "BrightnessHub.Changed");
             };
             _service = service;
         }

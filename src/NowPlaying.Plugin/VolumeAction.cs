@@ -11,7 +11,7 @@ namespace NowPlaying.Plugin;
 /// skipping, every tick counts here, so a fast spin moves further.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.volume")]
-public sealed class VolumeAction : EncoderBase
+public sealed class VolumeAction : SafeEncoderBase
 {
     private const string LayoutPath = "layouts/volume.json";
     private const string StepKey = "step";
@@ -19,6 +19,7 @@ public sealed class VolumeAction : EncoderBase
 
     private readonly object _gate = new();
     private readonly Action<VolumeSnapshot> _onChanged;
+    private readonly FeedbackPump _pump;
     private FeedbackFrame? _lastFrame;
     private int _stepPercent = 2;
     private readonly Dictionary<bool, string> _tileCache = new();
@@ -28,13 +29,14 @@ public sealed class VolumeAction : EncoderBase
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] volume appear: context {connection.ContextId}");
 
+        _pump = new FeedbackPump("volume dial", Compose, frame => Connection.SetFeedbackAsync(FeedbackJson.ToJObject(frame)));
         ApplySettings(payload.Settings, writeBackDefaults: true);
 
-        _onChanged = snapshot => Push(snapshot, full: false);
+        _onChanged = snapshot => Push(full: false);
         VolumeHub.Changed += _onChanged;
         VolumeHub.Attach();
 
-        connection.OnDeviceDidConnect += (_, _) => Push(VolumeHub.Current, full: true);
+        connection.OnDeviceDidConnect += (_, _) => Push(full: true);
 
         _ = ApplyLayoutAndPushAsync();
     }
@@ -43,19 +45,19 @@ public sealed class VolumeAction : EncoderBase
     {
         try
         {
-            await Connection.SetFeedbackLayoutAsync(LayoutPath);
+            await SendWatchdog.Watch(Connection.SetFeedbackLayoutAsync(LayoutPath), "layout");
         }
         catch (Exception ex)
         {
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] volume setFeedbackLayout failed: {ex.Message}");
         }
 
-        Push(VolumeHub.Current, full: true);
+        Push(full: true);
     }
 
     // -- input --------------------------------------------------------------
 
-    public override void DialRotate(DialRotatePayload payload)
+    protected override void OnDialRotate(DialRotatePayload payload)
     {
         if (payload.Ticks == 0 || payload.IsDialPressed)
         {
@@ -70,17 +72,17 @@ public sealed class VolumeAction : EncoderBase
 
         if (!VolumeHub.AdjustBy(payload.Ticks * step / 100f))
         {
-            _ = Connection.ShowAlert();
+            _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert");
         }
     }
 
-    public override void DialDown(DialPayload payload) => ToggleMute();
+    protected override void OnDialDown(DialPayload payload) => ToggleMute();
 
-    public override void DialUp(DialPayload payload)
+    protected override void OnDialUp(DialPayload payload)
     {
     }
 
-    public override void TouchPress(TouchpadPressPayload payload)
+    protected override void OnTouchPress(TouchpadPressPayload payload)
     {
         if (payload.IsLongPress)
         {
@@ -94,32 +96,30 @@ public sealed class VolumeAction : EncoderBase
     {
         if (!VolumeHub.ToggleMute())
         {
-            _ = Connection.ShowAlert();
+            _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert");
         }
     }
 
     // -- display --------------------------------------------------------------
 
-    public override void OnTick()
+    protected override void OnTickGuarded()
     {
     }
 
-    private void Push(VolumeSnapshot snapshot, bool full)
+    /// <summary>Bring the strip up to date; see <see cref="FeedbackPump"/>.</summary>
+    private void Push(bool full) => _pump.Request(full);
+
+    /// <summary>What the strip needs to match the current state. Called by the pump only, one pass at a time.</summary>
+    private Dictionary<string, object> Compose(bool full)
     {
-        Dictionary<string, object> payload;
+        var snapshot = VolumeHub.Current;
         lock (_gate)
         {
             var frame = VolumeRenderer.Render(snapshot, TileFor(snapshot.Muted));
-            payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
+            var payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
+            return payload;
         }
-
-        if (payload.Count == 0)
-        {
-            return;
-        }
-
-        _ = SendAsync(payload);
     }
 
     /// <summary>The two speaker tiles, rendered once each. Call under the gate.</summary>
@@ -134,23 +134,11 @@ public sealed class VolumeAction : EncoderBase
         return dataUri;
     }
 
-    private async Task SendAsync(Dictionary<string, object> payload)
-    {
-        try
-        {
-            await Connection.SetFeedbackAsync(FeedbackJson.ToJObject(payload));
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] volume setFeedback failed: {ex.Message}");
-        }
-    }
-
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload) => ApplySettings(payload.Settings, writeBackDefaults: false);
+    protected override void OnReceivedSettings(ReceivedSettingsPayload payload) => ApplySettings(payload.Settings, writeBackDefaults: false);
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload)
+    protected override void OnReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload)
     {
     }
 
@@ -165,12 +153,13 @@ public sealed class VolumeAction : EncoderBase
         {
             var filled = settings is null ? new JObject() : (JObject)settings.DeepClone();
             filled[StepKey] = _stepPercent.ToString();
-            _ = Connection.SetSettingsAsync(filled);
+            _ = SendWatchdog.Watch(Connection.SetSettingsAsync(filled), "settings");
         }
     }
 
-    public override void Dispose()
+    protected override void OnDispose()
     {
+        _pump.Stop();
         VolumeHub.Changed -= _onChanged;
         Logger.Instance.LogMessage(TracingLevel.INFO, "[action] volume disappear");
     }

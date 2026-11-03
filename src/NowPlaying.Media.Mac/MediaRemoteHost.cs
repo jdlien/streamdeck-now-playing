@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 namespace NowPlaying.Media;
 
@@ -77,6 +79,18 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
 
     private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// How long a transport command may go unacknowledged before the helper is
+    /// presumed wedged. Commands run on the helper's stdin thread, not on the
+    /// queue that ticks, so a command stuck inside MediaRemote leaves the
+    /// heartbeat going and the silence check satisfied while every press after
+    /// it goes nowhere.
+    /// </summary>
+    internal static readonly TimeSpan CommandLimit = TimeSpan.FromSeconds(15);
+
+    /// <summary>Commands held for the helper at most; past this the oldest are dropped, since a helper that far behind is stuck.</summary>
+    private const int CommandBacklog = 64;
+
     /// <summary>A run shorter than this is a failing run; do not clear the backoff.</summary>
     private static readonly TimeSpan HealthyRun = TimeSpan.FromMinutes(2);
 
@@ -85,6 +99,15 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
     private readonly object _gate = new();
 
     private Process? _process;
+    private Channel<string>? _commands;
+    /// <summary>
+    /// When each transport command not yet acknowledged was written, oldest
+    /// first. One per command, because the helper answers them one at a time:
+    /// a single shared timestamp was cleared by the first answer even with a
+    /// later command still stuck, which left the watchdog blind to exactly the
+    /// hang it is for.
+    /// </summary>
+    private ConcurrentQueue<long> _unacknowledged = new();
     private Task? _supervisor;
     private TimeSpan _restartDelay = RestartDelay;
     private long _lastMessageTicks = DateTime.UtcNow.Ticks;
@@ -121,6 +144,23 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         IsRunning,
         TimeSpan.FromTicks(DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMessageTicks)));
 
+    /// <summary>
+    /// The wait before the next start, given the wait before this one and how
+    /// long this run lasted. Only a run that lasted counts as a good one, and
+    /// how it ended does not matter.
+    ///
+    /// It used to: the backoff grew only when starting the helper threw. A
+    /// helper that crashed on arrival -- an uncaught exception on its first
+    /// publish -- ended in a clean end-of-stream instead, so it was restarted
+    /// every two seconds, 1,633 times in one evening, each crash dumping a stack
+    /// trace into the log. A helper that wedges immediately and is killed by the
+    /// watchdog is the same case.
+    /// </summary>
+    internal static TimeSpan NextRestartDelay(TimeSpan current, TimeSpan runLength) =>
+        runLength >= HealthyRun
+            ? RestartDelay
+            : TimeSpan.FromTicks(Math.Min(current.Ticks * 2, MaxRestartDelay.Ticks));
+
     /// <summary>The rule behind <see cref="IsHealthy"/>, without a clock.</summary>
     internal static bool IsAnswering(bool running, TimeSpan silence) =>
         running && silence < SilenceLimit;
@@ -149,28 +189,51 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Send a command. Silently does nothing when the helper is down.</summary>
+    /// <summary>
+    /// Queue a command for the helper. Never blocks: the write happens on a
+    /// writer of its own. Silently does nothing when the helper is down.
+    ///
+    /// Callers include the dial handlers, which StreamDeck-Tools runs under one
+    /// lock shared by every key and dial, so a write into a full pipe used to
+    /// stall all input to the plugin. They also include the helper's own reader
+    /// and the Music poll, and a StreamWriter written from several threads at
+    /// once is not safe.
+    /// </summary>
     public void Send(string command)
     {
-        Process? process;
+        Channel<string>? commands;
         lock (_gate)
         {
-            process = _process;
+            commands = _commands;
         }
 
-        if (process is null || process.HasExited)
-        {
-            return;
-        }
+        commands?.Writer.TryWrite(command);
+    }
 
+    private static bool IsTransport(string command) => command is "next" or "previous" or "toggle";
+
+    /// <summary>Write queued commands to one helper, in order, until it goes away.</summary>
+    private async Task WriteCommandsAsync(Process process, ChannelReader<string> commands, CancellationToken token)
+    {
         try
         {
-            process.StandardInput.WriteLine(command);
-            process.StandardInput.Flush();
+            await foreach (var command in commands.ReadAllAsync(token).ConfigureAwait(false))
+            {
+                if (IsTransport(command))
+                {
+                    _unacknowledged.Enqueue(Stopwatch.GetTimestamp()); // pauses across sleep
+                }
+
+                await process.StandardInput.WriteLineAsync(command.AsMemory(), token).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync(token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
-            _log?.Invoke($"sending '{command}' failed: {ex.Message}");
+            _log?.Invoke($"writing to the helper failed: {ex.Message}");
         }
     }
 
@@ -189,13 +252,6 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             try
             {
                 await RunOnceAsync(helper).ConfigureAwait(false);
-                // Only a run that lasted counts as a good one. A helper that
-                // wedges immediately would otherwise reset the backoff every
-                // time the watchdog killed it and restart in a tight loop.
-                if (DateTimeOffset.UtcNow - startedAt >= HealthyRun)
-                {
-                    _restartDelay = RestartDelay;
-                }
             }
             catch (OperationCanceledException)
             {
@@ -204,8 +260,9 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             catch (Exception ex)
             {
                 _log?.Invoke($"helper failed: {ex.Message}");
-                _restartDelay = TimeSpan.FromTicks(Math.Min(_restartDelay.Ticks * 2, MaxRestartDelay.Ticks));
             }
+
+            _restartDelay = NextRestartDelay(_restartDelay, DateTimeOffset.UtcNow - startedAt);
 
             if (_cancellation.IsCancellationRequested)
             {
@@ -253,9 +310,16 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("could not start the helper host");
 
+        var commands = Channel.CreateBounded<string>(new BoundedChannelOptions(CommandBacklog)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+        });
+        Volatile.Write(ref _unacknowledged, new ConcurrentQueue<long>());
         lock (_gate)
         {
             _process = process;
+            _commands = commands;
         }
 
         _ = Task.Run(async () =>
@@ -270,6 +334,7 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         Interlocked.Exchange(ref _lastMessageTicks, DateTime.UtcNow.Ticks);
         using var run = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token);
         var watchdog = Task.Run(() => WatchAsync(process, run.Token));
+        var writer = Task.Run(() => WriteCommandsAsync(process, commands.Reader, run.Token));
 
         try
         {
@@ -286,6 +351,7 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
         }
         finally
         {
+            commands.Writer.TryComplete();
             await run.CancelAsync().ConfigureAwait(false);
             try
             {
@@ -298,6 +364,7 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             lock (_gate)
             {
                 _process = null;
+                _commands = null;
             }
 
             if (!process.HasExited)
@@ -341,12 +408,17 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
             }
 
             var silence = TimeSpan.FromTicks(DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastMessageTicks));
-            if (silence < SilenceLimit)
+            var unanswered = Volatile.Read(ref _unacknowledged).TryPeek(out var oldest)
+                ? Stopwatch.GetElapsedTime(oldest)
+                : TimeSpan.Zero;
+            if (silence < SilenceLimit && unanswered < CommandLimit)
             {
                 continue;
             }
 
-            _log?.Invoke($"helper has said nothing for {silence.TotalSeconds:0}s; restarting it");
+            _log?.Invoke(silence >= SilenceLimit
+                ? $"helper has said nothing for {silence.TotalSeconds:0}s; restarting it"
+                : $"helper has not acknowledged a command for {unanswered.TotalSeconds:0}s; restarting it");
             try
             {
                 process.Kill(entireProcessTree: true);
@@ -419,6 +491,10 @@ internal sealed class MediaRemoteHost : IAsyncDisposable
                     }
                 }
 
+                break;
+
+            case "command":
+                Volatile.Read(ref _unacknowledged).TryDequeue(out _);
                 break;
 
             case "fatal":

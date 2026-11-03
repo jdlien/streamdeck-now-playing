@@ -71,11 +71,11 @@ internal static class PropertyInspectorBridge
     }
 
     private static void Reply(ISDConnection connection, string dataSource, JArray items) =>
-        _ = connection.SendToPropertyInspectorAsync(new JObject
+        _ = SendWatchdog.Watch(connection.SendToPropertyInspectorAsync(new JObject
         {
             ["event"] = dataSource,
             ["items"] = items,
-        });
+        }), "inspector reply");
 
     /// <summary>The preferred app id from global settings, or null for automatic.</summary>
     public static string? PreferredAppFrom(JObject? globalSettings)

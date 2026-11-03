@@ -93,25 +93,40 @@ public sealed class MacVolumeService : IVolumeService
         Rebind();
     }
 
-    public bool AdjustBy(float delta)
-    {
-        var current = Current;
-        return current.CanSetVolume && SetLevel(Math.Clamp(current.Level + delta, 0f, 1f));
-    }
+    /// <summary>
+    /// Move the level relative to where it is. The starting level is read
+    /// together with the device it belongs to: read separately, a switch of
+    /// output in between applied the old device's level, plus the step, to
+    /// the new one -- a turn up from the speakers' 10% landing at 92%.
+    /// </summary>
+    public bool AdjustBy(float delta) => SetLevel(current => current + delta);
 
-    public bool SetLevel(float level)
+    public bool SetLevel(float level) => SetLevel(_ => level);
+
+    private bool SetLevel(Func<float, float> target)
     {
+        // The device and the generation it was bound under, taken together and
+        // used for the whole operation. A default-output switch can land while
+        // the write is in flight, and the state read back afterwards used to be
+        // published unconditionally: the old device's level replaced the new
+        // one's on the strip and stayed there until something else changed.
         uint device;
+        int generation;
+        bool muted;
+        float from;
         lock (_gate)
         {
             device = _device;
+            generation = _generation;
+            muted = _current is { Muted: true, CanMute: true };
+            from = _current.Level;
             if (device == 0 || !_current.CanSetVolume)
             {
                 return false;
             }
         }
 
-        var value = Math.Clamp(level, 0f, 1f);
+        var value = Math.Clamp(target(from), 0f, 1f);
         var status = CoreAudio.AudioObjectSetPropertyData(device, VolumeAddress, 0, IntPtr.Zero, sizeof(float), value);
         if (status != 0)
         {
@@ -120,33 +135,39 @@ public sealed class MacVolumeService : IVolumeService
         }
 
         // Unmute on a deliberate level change, matching the Windows behaviour.
-        if (Current is { Muted: true, CanMute: true })
+        if (muted)
         {
-            SetMute(false);
+            SetMute(device, generation, false);
         }
 
-        Publish(Read(device, _generation));
+        Publish(Read(device, generation), generation);
         return true;
     }
 
     public bool ToggleMute()
     {
-        var current = Current;
-        return current is { HasDevice: true, CanMute: true } && SetMute(!current.Muted);
-    }
-
-    private bool SetMute(bool muted)
-    {
         uint device;
+        int generation;
+        bool muted;
         lock (_gate)
         {
             device = _device;
-            if (device == 0 || !_current.CanMute)
+            generation = _generation;
+            muted = _current.Muted;
+            if (device == 0 || !_current.HasDevice || !_current.CanMute)
             {
                 return false;
             }
         }
 
+        return SetMute(device, generation, !muted);
+    }
+
+    /// <param name="device">The device to change: the one the caller read, never whatever is bound by now.</param>
+    /// <param name="generation">The binding the caller read it under; see <see cref="SetLevel(Func{float, float})"/>.</param>
+    /// <param name="muted">The mute state to set.</param>
+    private bool SetMute(uint device, int generation, bool muted)
+    {
         var value = muted ? 1u : 0u;
         var status = CoreAudio.AudioObjectSetPropertyData(device, MuteAddress, 0, IntPtr.Zero, sizeof(uint), value);
         if (status != 0)
@@ -155,7 +176,7 @@ public sealed class MacVolumeService : IVolumeService
             return false;
         }
 
-        Publish(Read(device, _generation));
+        Publish(Read(device, generation), generation);
         return true;
     }
 
@@ -173,6 +194,12 @@ public sealed class MacVolumeService : IVolumeService
 
             previous = _device;
             generation = ++_generation;
+
+            // No device until the new one is installed. Otherwise a write in
+            // between paired the old device with the new generation, and its
+            // read-back passed the generation check and was published over
+            // the new device's state.
+            _device = 0;
         }
 
         if (previous != 0)
@@ -190,22 +217,32 @@ public sealed class MacVolumeService : IVolumeService
             return;
         }
 
+        CoreAudio.AudioObjectAddPropertyListener(device, VolumeAddress, _onDevicePropertyChanged, IntPtr.Zero);
+        CoreAudio.AudioObjectAddPropertyListener(device, MuteAddress, _onDevicePropertyChanged, IntPtr.Zero);
+
+        // Read first, then install the device and its state together. With the
+        // device installed before its state was read, a turn in between saw the
+        // new device next to the previous output's level -- from 90% on the
+        // old output, a step up wrote 92% to speakers that had been at 10%.
+        var snapshot = Read(device, generation);
+        bool changed;
         lock (_gate)
         {
-            if (_generation != generation)
+            if (_disposed || _generation != generation)
             {
                 return; // another rebind overtook this one
             }
 
             _device = device;
+            changed = _current != snapshot;
+            _current = snapshot;
         }
 
-        CoreAudio.AudioObjectAddPropertyListener(device, VolumeAddress, _onDevicePropertyChanged, IntPtr.Zero);
-        CoreAudio.AudioObjectAddPropertyListener(device, MuteAddress, _onDevicePropertyChanged, IntPtr.Zero);
-
-        var snapshot = Read(device, generation);
         _log?.Invoke($"bound to '{snapshot.DeviceName}' (volume {(snapshot.CanSetVolume ? "settable" : "hardware only")}, mute {(snapshot.CanMute ? "available" : "unavailable")})");
-        Publish(snapshot, generation);
+        if (changed)
+        {
+            Changed?.Invoke(snapshot);
+        }
     }
 
     private void RemoveDeviceListeners(uint device)

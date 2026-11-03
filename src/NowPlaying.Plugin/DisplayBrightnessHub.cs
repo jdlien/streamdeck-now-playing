@@ -31,8 +31,8 @@ internal static class DisplayBrightnessHub
                 return;
             }
 
-            service.Changed += (name, snapshot) => Changed?.Invoke(name, snapshot);
-            service.MonitorsChanged += () => MonitorsChanged?.Invoke();
+            service.Changed += (name, snapshot) => Guard.Raise(Changed, name, snapshot, "DisplayBrightnessHub.Changed");
+            service.MonitorsChanged += () => Guard.Raise(MonitorsChanged, "DisplayBrightnessHub.MonitorsChanged");
             _service = service;
             service.Start();
         }

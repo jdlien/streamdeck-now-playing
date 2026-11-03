@@ -48,6 +48,18 @@ public sealed class MacMediaSessionService : IMediaSessionService
     private Task? _musicPoller;
     private bool _started;
     private DateTimeOffset _playingSince = DateTimeOffset.MinValue;
+    private bool _recheckScheduled;  // a held-off switch will be looked at again
+    private long _musicReadsStarted; // sequence of Music reads, so a slow one cannot land after a newer one
+    private long _musicReadPublished;
+    private DateTimeOffset _lastMusicHandback = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Least time between two hand-backs from Music to MediaRemote. Each one
+    /// asks the helper to republish, and if MediaRemote still names Music the
+    /// route comes straight back: without a floor, the two ask each other as
+    /// fast as an AppleScript round trip allows.
+    /// </summary>
+    private static readonly TimeSpan HandbackInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// How long a playing session keeps the display after macOS names a
@@ -222,28 +234,53 @@ public sealed class MacMediaSessionService : IMediaSessionService
         // Hold a playing session against a switch to one that is merely paused.
         // Without this the strip can move to another app between a press and the
         // command it sends, and the press lands on the wrong player.
+        //
+        // A held-off switch is looked at again once the hold runs out. It used
+        // to be dropped: the helper does not repeat a state it has already sent,
+        // its 30-second backstop included, so nothing ever re-offered it, and
+        // the strip went on showing the old player "playing" -- its bar running
+        // past the end of the track -- until some unrelated change came along or
+        // a replug forced a refresh. A session that has gone altogether (no app
+        // at all) is not held: there is no player left to land a press on.
+        var hold = false;
+        TimeSpan? recheckIn = null;
         lock (_gate)
         {
             var incomingIsPlaying = state.Playing || state.Rate is > 0;
             var differentApp = !string.Equals(state.Bundle, _current.AppId, StringComparison.OrdinalIgnoreCase);
-            var holdingPlaying = _current.State == PlaybackState.Playing
-                && DateTimeOffset.UtcNow - _playingSince < PlayingStickiness;
+            var heldFor = DateTimeOffset.UtcNow - _playingSince;
+            var holdingPlaying = _current.State == PlaybackState.Playing && heldFor < PlayingStickiness;
 
-            if (differentApp && !incomingIsPlaying && holdingPlaying && !string.IsNullOrEmpty(_current.AppId))
+            if (differentApp && !incomingIsPlaying && holdingPlaying
+                && !string.IsNullOrEmpty(_current.AppId) && !string.IsNullOrEmpty(state.Bundle))
             {
-                _log?.Invoke($"ignoring a switch to paused {state.Bundle}; {_current.AppId} is still playing");
-                return;
+                hold = true;
+                if (!_recheckScheduled)
+                {
+                    _recheckScheduled = true;
+                    recheckIn = PlayingStickiness - heldFor + TimeSpan.FromMilliseconds(250);
+                }
             }
-
-            if (incomingIsPlaying)
+            else if (incomingIsPlaying)
             {
                 _playingSince = DateTimeOffset.UtcNow;
             }
         }
 
+        if (recheckIn is { } delay)
+        {
+            _ = RecheckAfterAsync(delay);
+        }
+
+        if (hold)
+        {
+            _log?.Invoke($"holding off a switch to paused {state.Bundle}; {_current.AppId} is still playing");
+            return;
+        }
+
         // Route to Music when it owns the session and MediaRemote would not
         // answer, or when it has been pinned as the preferred player.
-        var preferMusic = string.Equals(_preferredAppId, MusicAppAdapter.BundleId, StringComparison.OrdinalIgnoreCase);
+        var preferMusic = IsMusicPreferred;
         var musicOwns = string.Equals(state.Bundle, MusicAppAdapter.BundleId, StringComparison.OrdinalIgnoreCase);
         var route = (musicOwns && state.Stale) || preferMusic;
 
@@ -277,6 +314,30 @@ public sealed class MacMediaSessionService : IMediaSessionService
         {
             SetArtwork(null, null);
         }
+    }
+
+    /// <summary>Ask the helper for its state again once a hold has run out; see <see cref="OnHostState"/>.</summary>
+    private async Task RecheckAfterAsync(TimeSpan delay)
+    {
+        try
+        {
+            await Task.Delay(delay, _cancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _recheckScheduled = false;
+            }
+        }
+
+        // "refresh" makes the helper forget what it last sent and send it again,
+        // so the state that was held off comes back to be judged afresh.
+        _host.Send("refresh");
     }
 
     private void OnHostArtwork(string key, byte[] bytes)
@@ -404,6 +465,14 @@ public sealed class MacMediaSessionService : IMediaSessionService
 
     private async Task PublishMusicAsync(CancellationToken token)
     {
+        // Reads come from the poll, from helper events and from commands, and
+        // nothing serializes them. A read that finishes after a newer one has
+        // already been published, or after the route has left Music, is old
+        // news: publishing it put a stale track -- or Music itself -- back over
+        // whatever had replaced it, and with the route gone nothing polled
+        // Music again to correct it. So every result is checked and committed
+        // in one step, under the lock the route changes under.
+        var sequence = Interlocked.Increment(ref _musicReadsStarted);
         var outcome = await _music.ReadAsync(token).ConfigureAwait(false);
 
         // A query that failed says nothing about what Music is doing. Treating
@@ -419,20 +488,49 @@ public sealed class MacMediaSessionService : IMediaSessionService
         if (outcome.Status == MusicReadStatus.NotPlaying || outcome.State is null)
         {
             // Music really has nothing on. Hand back to MediaRemote if it is
-            // there; if it is not, there is nothing else to ask.
+            // there and may know of another player; otherwise say so.
+            //
+            // Not when Music is the preferred player: the hand-back's republish
+            // is routed straight back to Music, which still has nothing on,
+            // which hands back again -- an AppleScript a round trip, forever.
+            // Pinned, Music keeps the route and the poll asks it again on its
+            // own schedule. And never more often than the floor, because a
+            // MediaRemote that still names Music does the same thing unpinned.
+            bool handBack;
             lock (_gate)
             {
-                _musicRouted = false;
+                if (!ClaimMusicReadLocked(sequence))
+                {
+                    return;
+                }
+
+                var pinned = IsMusicPreferred;
+                _musicRouted = pinned;
+                handBack = !pinned && _host.IsHealthy && DateTimeOffset.UtcNow - _lastMusicHandback >= HandbackInterval;
+                if (handBack)
+                {
+                    _lastMusicHandback = DateTimeOffset.UtcNow;
+                }
             }
 
-            if (_host.IsHealthy)
+            if (handBack)
             {
                 _host.Send("refresh");
+                return;
             }
-            else
+
+            // Music having nothing on may clear Music's own display, never one
+            // that another player has taken over in the meantime -- unless Music
+            // is pinned, when the display is Music's whatever was on it before:
+            // refusing then left the previous player's track up indefinitely
+            // while every press went to Music.
+            bool StillMusics() => Interlocked.Read(ref _musicReadPublished) == sequence
+                && ((IsMusicPreferred && _musicRouted)
+                    || string.IsNullOrEmpty(_current.AppId)
+                    || string.Equals(_current.AppId, MusicAppAdapter.BundleId, StringComparison.OrdinalIgnoreCase));
+            if (Publish(NowPlayingSnapshot.Empty, StillMusics))
             {
-                Publish(NowPlayingSnapshot.Empty);
-                SetArtwork(null, null);
+                SetArtwork(null, null, StillMusics);
             }
 
             return;
@@ -452,7 +550,10 @@ public sealed class MacMediaSessionService : IMediaSessionService
             CanPrevious: true,
             CanToggle: true);
 
-        Publish(snapshot);
+        if (!Publish(snapshot, () => ClaimMusicReadLocked(sequence)))
+        {
+            return;
+        }
 
         // Artwork is keyed by the track, so it is fetched once per track rather
         // than on every poll: reading it costs an AppleScript round trip and a
@@ -467,20 +568,53 @@ public sealed class MacMediaSessionService : IMediaSessionService
         if (key != currentKey && state.State != PlaybackState.Stopped)
         {
             var bytes = await _music.ReadArtworkAsync(token).ConfigureAwait(false);
-            SetArtwork(bytes is null ? null : key, bytes);
+
+            // The route or the track may have moved on while the art was read.
+            SetArtwork(bytes is null ? null : key, bytes,
+                () => _musicRouted && Interlocked.Read(ref _musicReadPublished) == sequence);
         }
+    }
+
+    private bool IsMusicPreferred =>
+        string.Equals(_preferredAppId, MusicAppAdapter.BundleId, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a finished Music read may be published: the route is still on
+    /// Music and no newer read has been published first. Claims the slot when
+    /// it may, so an older read finishing later is refused. Call under the gate.
+    /// </summary>
+    private bool ClaimMusicReadLocked(long sequence)
+    {
+        if (!_musicRouted || sequence < Interlocked.Read(ref _musicReadPublished))
+        {
+            return false;
+        }
+
+        Interlocked.Exchange(ref _musicReadPublished, sequence);
+        return true;
     }
 
     /// <summary>Trim and collapse a metadata field; null becomes empty, as the snapshot expects.</summary>
     private static string Clean(string? value) => string.IsNullOrWhiteSpace(value) ? "" : value.Trim();
 
-    private void Publish(NowPlayingSnapshot snapshot)
+    /// <param name="snapshot">The new state.</param>
+    /// <param name="stillValid">
+    /// Checked under the same lock the snapshot is committed under, for a
+    /// result that may have gone stale while it was being fetched.
+    /// </param>
+    /// <returns>False when <paramref name="stillValid"/> refused it.</returns>
+    private bool Publish(NowPlayingSnapshot snapshot, Func<bool>? stillValid = null)
     {
         lock (_gate)
         {
+            if (stillValid is not null && !stillValid())
+            {
+                return false;
+            }
+
             if (!SnapshotChange.IsSignificant(_current, snapshot, DateTimeOffset.UtcNow))
             {
-                return;
+                return true;
             }
 
             _current = snapshot;
@@ -488,6 +622,7 @@ public sealed class MacMediaSessionService : IMediaSessionService
 
         _log?.Invoke($"{snapshot.AppId ?? "nothing"}: {snapshot.State} \"{snapshot.Title}\"");
         Raise(() => SnapshotChanged?.Invoke(snapshot), nameof(SnapshotChanged));
+        return true;
     }
 
     /// <summary>
@@ -507,12 +642,12 @@ public sealed class MacMediaSessionService : IMediaSessionService
         }
     }
 
-    private void SetArtwork(string? key, byte[]? bytes)
+    private void SetArtwork(string? key, byte[]? bytes, Func<bool>? stillValid = null)
     {
         Artwork? artwork = null;
         lock (_gate)
         {
-            if (key == _artworkKey)
+            if (key == _artworkKey || (stillValid is not null && !stillValid()))
             {
                 return;
             }

@@ -78,7 +78,13 @@ static NSData *gArtworkData;
 static NSString *gArtworkMime;
 static NSString *gLastLine;     // so unchanged state is not re-sent
 static BOOL gPublishQueued;     // coalesces a burst of notifications
-static int gTimeouts;           // consecutive calls that never came back
+// Consecutive calls that never came back, counted per call. One shared count
+// was reset by any call that did answer, so a metadata call that always timed
+// out between two that always answered went 0, 1, 0 on every publish, never
+// reached the limit, and leaked a blocked thread each time for good.
+static int gClientTimeouts;
+static int gInfoTimeouts;
+static int gPlayingTimeouts;
 static unsigned long long gTicks;
 
 /// A metadata read that never returns is the Music.app case; bound every call.
@@ -100,9 +106,34 @@ static const NSTimeInterval kBackstop = 30.0;
 /// stdout is written from gQueue and from the stdin reader thread.
 static os_unfair_lock gEmitLock = OS_UNFAIR_LOCK_INIT;
 
+/// JSON for one message, or nil. NSJSONSerialization does not report a value it
+/// cannot write through its error argument; it throws. A player reporting an
+/// infinite duration -- a live stream does exactly that -- took the helper down
+/// with an uncaught NSInvalidArgumentException on every publish, and since the
+/// next helper read the same state, it did so every two seconds for as long as
+/// the stream was on. Nothing that goes out is allowed to end the process.
+static NSData *encode(NSDictionary *object, NSJSONWritingOptions options) {
+    if (![NSJSONSerialization isValidJSONObject:object]) { return nil; }
+    @try {
+        return [NSJSONSerialization dataWithJSONObject:object options:options error:nil];
+    } @catch (NSException *exception) {
+        return nil;
+    }
+}
+
+/// A number fit for JSON, or nil: NaN and infinity are not numbers JSON has.
+static NSNumber *finiteNumber(id value) {
+    if (![value isKindOfClass:NSNumber.class]) { return nil; }
+    return isfinite([value doubleValue]) ? value : nil;
+}
+
+/// A string, or nil when the provider put something else under the key.
+static NSString *stringValue(id value) {
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
 static void emit(NSDictionary *object) {
-    NSError *error = nil;
-    NSData *json = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
+    NSData *json = encode(object, 0);
     if (!json) { return; }
     NSMutableData *line = [json mutableCopy];
     [line appendBytes:"\n" length:1];
@@ -122,15 +153,15 @@ static NSString *sha1Hex(NSData *data) {
 
 /// Wait out one MediaRemote call. Returns YES if it never answered, and exits
 /// the process once too many in a row have not, because they never will.
-static BOOL waitBounded(dispatch_semaphore_t done) {
+static BOOL waitBounded(dispatch_semaphore_t done, int *timeouts) {
     BOOL timedOut = dispatch_semaphore_wait(
         done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kCallTimeout * NSEC_PER_SEC))) != 0;
     if (!timedOut) {
-        gTimeouts = 0;
+        *timeouts = 0;
         return NO;
     }
 
-    if (++gTimeouts >= kMaxTimeouts) {
+    if (++*timeouts >= kMaxTimeouts) {
         emit(@{ @"type": @"fatal", @"error": @"MediaRemote stopped answering; restarting" });
         exit(3);
     }
@@ -150,7 +181,7 @@ static NSString *currentBundleId(void) {
         }
         dispatch_semaphore_signal(done);
     });
-    waitBounded(done);
+    waitBounded(done, &gClientTimeouts);
     return result;
 }
 
@@ -162,7 +193,7 @@ static BOOL currentIsPlaying(void) {
         playing = value ? YES : NO;
         dispatch_semaphore_signal(done);
     });
-    waitBounded(done);
+    waitBounded(done, &gPlayingTimeouts);
     return playing;
 }
 
@@ -175,7 +206,7 @@ static void publish(void) {
         info = [value copy];
         dispatch_semaphore_signal(done);
     });
-    BOOL timedOut = waitBounded(done);
+    BOOL timedOut = waitBounded(done, &gInfoTimeouts);
 
     NSMutableDictionary *out = [NSMutableDictionary dictionary];
     out[@"type"] = @"now";
@@ -189,16 +220,20 @@ static void publish(void) {
     out[@"playing"] = @(currentIsPlaying());
 
     if (info.count > 0) {
-        NSString *title = info[@"kMRMediaRemoteNowPlayingInfoTitle"];
-        NSString *artist = info[@"kMRMediaRemoteNowPlayingInfoArtist"];
-        NSString *album = info[@"kMRMediaRemoteNowPlayingInfoAlbum"];
+        // Every value checked for type and range: whatever a provider puts in
+        // its dictionary goes straight into JSON, and see encode() for what one
+        // bad number used to cost. A live stream's infinite duration is simply
+        // left out, which the plugin already reads as "no timeline".
+        NSString *title = stringValue(info[@"kMRMediaRemoteNowPlayingInfoTitle"]);
+        NSString *artist = stringValue(info[@"kMRMediaRemoteNowPlayingInfoArtist"]);
+        NSString *album = stringValue(info[@"kMRMediaRemoteNowPlayingInfoAlbum"]);
         if (title) { out[@"title"] = title; }
         if (artist) { out[@"artist"] = artist; }
         if (album) { out[@"album"] = album; }
 
-        NSNumber *duration = info[@"kMRMediaRemoteNowPlayingInfoDuration"];
-        NSNumber *elapsed = info[@"kMRMediaRemoteNowPlayingInfoElapsedTime"];
-        NSNumber *rate = info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"];
+        NSNumber *duration = finiteNumber(info[@"kMRMediaRemoteNowPlayingInfoDuration"]);
+        NSNumber *elapsed = finiteNumber(info[@"kMRMediaRemoteNowPlayingInfoElapsedTime"]);
+        NSNumber *rate = finiteNumber(info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"]);
         if (duration) { out[@"duration"] = duration; }
         if (elapsed) { out[@"elapsed"] = elapsed; }
         if (rate) { out[@"rate"] = rate; }
@@ -206,7 +241,7 @@ static void publish(void) {
         // The player's own clock for the elapsed value, so the plugin can
         // extrapolate rather than trust a number that may be seconds old.
         NSDate *stamp = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
-        if ([stamp isKindOfClass:NSDate.class]) {
+        if ([stamp isKindOfClass:NSDate.class] && isfinite([stamp timeIntervalSince1970])) {
             out[@"elapsedAt"] = @([stamp timeIntervalSince1970]);
         }
 
@@ -217,12 +252,13 @@ static void publish(void) {
             if (![key isEqualToString:gArtworkKey]) {
                 gArtworkKey = key;
                 gArtworkData = art;
-                gArtworkMime = info[@"kMRMediaRemoteNowPlayingInfoArtworkMIMEType"] ?: @"image/jpeg";
+                gArtworkMime = stringValue(info[@"kMRMediaRemoteNowPlayingInfoArtworkMIMEType"]) ?: @"image/jpeg";
             }
         }
     }
 
-    NSData *encoded = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingSortedKeys error:nil];
+    NSData *encoded = encode(out, NSJSONWritingSortedKeys);
+    if (!encoded) { return; }
     NSString *line = [[NSString alloc] initWithData:encoded encoding:NSUTF8StringEncoding];
     if ([line isEqualToString:gLastLine]) { return; }   // nothing moved
     gLastLine = line;
@@ -277,8 +313,10 @@ static void readCommands(void) {
         if ([line isEqualToString:@"toggle"]) { command = 2; }
         else if ([line isEqualToString:@"next"]) { command = 4; }
         else if ([line isEqualToString:@"previous"]) { command = 5; }
-        if (command >= 0 && gSendCommand) {
-            Boolean accepted = gSendCommand(command, nil);
+        // Every transport command is answered, accepted or not: the supervisor
+        // treats one left unanswered as a helper stuck inside MediaRemote.
+        if (command >= 0) {
+            Boolean accepted = gSendCommand ? gSendCommand(command, nil) : false;
             emit(@{ @"type": @"command", @"name": line, @"accepted": @(accepted ? YES : NO) });
         }
     }

@@ -14,7 +14,7 @@ namespace NowPlaying.Plugin;
 /// Display: README section 6. Input: section 7. Recovery: section 8.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.dial")]
-public sealed class NowPlayingAction : EncoderBase
+public sealed class NowPlayingAction : SafeEncoderBase
 {
     /// <summary>Minimum gap between skips. Extra rotate events inside it are dropped, never queued.</summary>
     private static readonly TimeSpan SkipInterval = TimeSpan.FromMilliseconds(200);
@@ -36,6 +36,7 @@ public sealed class NowPlayingAction : EncoderBase
     private readonly Action<NowPlayingSnapshot> _onSnapshot;
     private readonly Action<Artwork?> _onArtwork;
     private readonly Action<VolumeSnapshot> _onVolume;
+    private readonly FeedbackPump _pump;
     private FeedbackFrame? _lastFrame;
     private DateTimeOffset _lastSkipAt = DateTimeOffset.MinValue;
     private string _rotate = RotateTrack;
@@ -79,23 +80,28 @@ public sealed class NowPlayingAction : EncoderBase
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] dial appear: context {connection.ContextId}");
 
+        _pump = new FeedbackPump("media dial", Compose, frame => Connection.SetFeedbackAsync(FeedbackJson.ToJObject(frame)));
         ApplySettings(payload.Settings, writeBackDefaults: true);
         PropertyInspectorBridge.Attach(connection);
-        _ = connection.GetGlobalSettingsAsync();
+        _ = SendWatchdog.Watch(connection.GetGlobalSettingsAsync(), "global settings request");
 
-        _onSnapshot = snapshot => Push(snapshot, full: false);
-        _onArtwork = artwork =>
+        _onSnapshot = snapshot => Push(full: false);
+        // The event says the artwork changed; what it changed to is read from
+        // the service, never taken from the event. Events are raised outside
+        // the service's lock, so two can arrive out of order, and the cached
+        // payload of the late one would otherwise stay on the dial for good.
+        _onArtwork = _ =>
         {
             lock (_gate)
             {
-                _artwork = artwork;
+                _artwork = MediaHub.CurrentArtwork;
             }
 
-            Push(MediaHub.Current, full: false);
+            Push(full: false);
         };
         MediaHub.SnapshotChanged += _onSnapshot;
         MediaHub.ArtworkChanged += _onArtwork;
-        _onVolume = _ => Push(MediaHub.Current, full: false);
+        _onVolume = _ => Push(full: false);
         VolumeHub.Changed += _onVolume;
         MediaHub.Attach();
         VolumeHub.Attach();   // the dial can be set to control volume; see RotateVolume
@@ -110,7 +116,7 @@ public sealed class NowPlayingAction : EncoderBase
         {
             Logger.Instance.LogMessage(TracingLevel.INFO, "[action] device connected: re-push");
             _ = MediaHub.RefreshAsync(full: false);
-            Push(MediaHub.Current, full: true);
+            Push(full: true);
         };
 
         _ = ApplyLayoutAndPushAsync();
@@ -125,14 +131,14 @@ public sealed class NowPlayingAction : EncoderBase
     {
         try
         {
-            await Connection.SetFeedbackLayoutAsync(LayoutPath);
+            await SendWatchdog.Watch(Connection.SetFeedbackLayoutAsync(LayoutPath), "layout");
         }
         catch (Exception ex)
         {
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setFeedbackLayout failed: {ex.Message}");
         }
 
-        Push(MediaHub.Current, full: true);
+        Push(full: true);
     }
 
     // -- input --------------------------------------------------------------
@@ -142,7 +148,7 @@ public sealed class NowPlayingAction : EncoderBase
     /// which can exceed one on a fast spin. Rotation while pressed is
     /// reserved and ignored.
     /// </summary>
-    public override void DialRotate(DialRotatePayload payload)
+    protected override void OnDialRotate(DialRotatePayload payload)
     {
         if (payload.Ticks == 0)
         {
@@ -169,7 +175,7 @@ public sealed class NowPlayingAction : EncoderBase
             case DialTurn.Volume:
                 if (!VolumeHub.AdjustBy(payload.Ticks * step / 100f))
                 {
-                    _ = Connection.ShowAlert();
+                    _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert");
                     return;
                 }
 
@@ -178,7 +184,7 @@ public sealed class NowPlayingAction : EncoderBase
                     _volumeShownUntil = DateTimeOffset.UtcNow + VolumeOverlay;
                 }
 
-                Push(MediaHub.Current, full: false);
+                Push(full: false);
                 return;
         }
 
@@ -197,7 +203,7 @@ public sealed class NowPlayingAction : EncoderBase
     }
 
     /// <summary>Toggle once per press. DialUp is deliberately a no-op.</summary>
-    public override void DialDown(DialPayload payload)
+    protected override void OnDialDown(DialPayload payload)
     {
         lock (_gate)
         {
@@ -211,7 +217,7 @@ public sealed class NowPlayingAction : EncoderBase
         Fire("toggle");
     }
 
-    public override void DialUp(DialPayload payload)
+    protected override void OnDialUp(DialPayload payload)
     {
         lock (_gate)
         {
@@ -225,7 +231,7 @@ public sealed class NowPlayingAction : EncoderBase
     }
 
     /// <summary>A short tap toggles. A hold is a distinct gesture and is ignored for now.</summary>
-    public override void TouchPress(TouchpadPressPayload payload)
+    protected override void OnTouchPress(TouchpadPressPayload payload)
     {
         if (payload.IsLongPress)
         {
@@ -245,7 +251,7 @@ public sealed class NowPlayingAction : EncoderBase
             Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] dial {command}: {(accepted ? "accepted" : "rejected")}");
             if (!accepted)
             {
-                await Connection.ShowAlert();
+                await SendWatchdog.Watch(Connection.ShowAlert(), "alert");
             }
         }
         catch (Exception ex)
@@ -261,7 +267,7 @@ public sealed class NowPlayingAction : EncoderBase
     /// extrapolated position moves the bar; otherwise the diff is empty and
     /// nothing is sent.
     /// </summary>
-    public override void OnTick() => Push(MediaHub.Current, full: false);
+    protected override void OnTickGuarded() => Push(full: false);
 
     /// <summary>
     /// The speaker badge, diffed separately because it is not part of the
@@ -286,8 +292,13 @@ public sealed class NowPlayingAction : EncoderBase
         payload[VolumeTextKey] = new Dictionary<string, object> { ["value"] = text, ["opacity"] = opacity };
     }
 
-    private void Push(NowPlayingSnapshot snapshot, bool full)
+    /// <summary>Bring the strip up to date; see <see cref="FeedbackPump"/>.</summary>
+    private void Push(bool full) => _pump.Request(full);
+
+    /// <summary>What the strip needs to match the current state. Called by the pump only, one pass at a time.</summary>
+    private Dictionary<string, object> Compose(bool full)
     {
+        var snapshot = MediaHub.Current;
         Dictionary<string, object> payload;
         lock (_gate)
         {
@@ -317,12 +328,7 @@ public sealed class NowPlayingAction : EncoderBase
             AddBadge(payload, volume, turning, full);
         }
 
-        if (payload.Count == 0)
-        {
-            return;
-        }
-
-        _ = SendAsync(payload);
+        return payload;
     }
 
     /// <summary>The art tile as a data URI when art is wanted and available; cached per (art, state). Call under the gate.</summary>
@@ -351,27 +357,15 @@ public sealed class NowPlayingAction : EncoderBase
         }
     }
 
-    private async Task SendAsync(Dictionary<string, object> payload)
-    {
-        try
-        {
-            await Connection.SetFeedbackAsync(FeedbackJson.ToJObject(payload));
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setFeedback failed: {ex.Message}");
-        }
-    }
-
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload)
+    protected override void OnReceivedSettings(ReceivedSettingsPayload payload)
     {
         ApplySettings(payload.Settings, writeBackDefaults: false);
-        Push(MediaHub.Current, full: false);
+        Push(full: false);
     }
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) =>
+    protected override void OnReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) =>
         MediaHub.SetPreferredAppId(PropertyInspectorBridge.PreferredAppFrom(payload.Settings));
 
     private void ApplySettings(JObject? settings, bool writeBackDefaults)
@@ -389,12 +383,13 @@ public sealed class NowPlayingAction : EncoderBase
             filled[ShowArtKey] = _showArt;
             filled[RotateKey] = _rotate;
             filled[VolumeStepKey] = _volumeStep.ToString();
-            _ = Connection.SetSettingsAsync(filled);
+            _ = SendWatchdog.Watch(Connection.SetSettingsAsync(filled), "settings");
         }
     }
 
-    public override void Dispose()
+    protected override void OnDispose()
     {
+        _pump.Stop();
         VolumeHub.Changed -= _onVolume;
         MediaHub.SnapshotChanged -= _onSnapshot;
         MediaHub.ArtworkChanged -= _onArtwork;

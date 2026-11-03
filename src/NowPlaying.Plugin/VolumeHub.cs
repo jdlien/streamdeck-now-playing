@@ -30,7 +30,7 @@ internal static class VolumeHub
                 return;
             }
 
-            service.Changed += snapshot => Changed?.Invoke(snapshot);
+            service.Changed += snapshot => Guard.Raise(Changed, snapshot, "VolumeHub.Changed");
             _service = service;
             try
             {

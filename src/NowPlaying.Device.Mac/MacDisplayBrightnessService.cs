@@ -149,6 +149,36 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     private bool _started;
     private bool _disposed;
 
+    /// <summary>
+    /// How long one display's probe and first read may take before the rebind
+    /// goes on without it. A DDC probe with its pacing and retries finishes in
+    /// a second or two; DisplayServices answers in milliseconds.
+    /// </summary>
+    internal static readonly TimeSpan ProbeLimit = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Displays whose last probe never returned. Not probed again until it
+    /// does: a call wedged in the driver cannot be cancelled, and starting a
+    /// fresh one on every retry would strand another thread each time.
+    /// </summary>
+    private readonly HashSet<uint> _stuckProbes = [];
+
+    /// <summary>How long a channel's worker may spend inside one pass before the display is rebound.</summary>
+    internal static readonly TimeSpan WorkerLimit = TimeSpan.FromSeconds(20);
+
+    private static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Channels reported stuck, kept until their call returns. While one is
+    /// here its display is neither probed nor given a new channel: a write
+    /// that wedges while reads still answer would otherwise get a fresh
+    /// worker on every rebind, wedge that one too, and strand a thread each
+    /// time. One stuck worker per display, at most.
+    /// </summary>
+    private readonly List<Channel> _wedged = [];
+
+    private Timer? _health;
+
     public MacDisplayBrightnessService(Action<string>? log = null)
     {
         _log = log;
@@ -194,13 +224,57 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         }
 
         NativeMethods.CGDisplayRegisterReconfigurationCallback(_onDisplaysChanged, IntPtr.Zero);
+        _health = new Timer(_ => CheckWorkers(), null, HealthInterval, HealthInterval);
 
-        // Synchronously, so the first action to appear has its monitors by the
-        // time it draws. Later requests all go through the settle window.
-        Pump();
+        // Not synchronously, though that let the first action draw with its
+        // monitors already known. Start is called from an action's constructor,
+        // which StreamDeck-Tools runs under the one lock every key, dial and
+        // tick waits on, and the first enumeration probes hardware: a probe
+        // that hung there would have stopped all input to the plugin. The
+        // dials draw "not connected" for the few milliseconds this takes and
+        // redraw on the MonitorsChanged that follows.
+        Schedule(TimeSpan.Zero);
     }
 
     public void Refresh() => Schedule(RebindSettle);
+
+    /// <summary>
+    /// Rebind when a display's worker has been inside one call for too long.
+    ///
+    /// The probe that admits a display is bounded, but the worker's later
+    /// reads and writes go through the same driver, and one that never
+    /// returns left the display taking dial turns and applying none of them:
+    /// the channel still looked healthy, so nothing ever retried it. A rebind
+    /// retires that channel -- its native objects are released only once the
+    /// stuck call comes back -- and re-probes the display through the bounded
+    /// probe, so a display still wedged says "not connected" instead.
+    /// </summary>
+    private void CheckWorkers()
+    {
+        string? stuck = null;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            foreach (var channel in _channels)
+            {
+                if (channel.BusyFor > WorkerLimit && channel.MarkReported())
+                {
+                    stuck = channel.Name;
+                    _wedged.Add(channel);
+                }
+            }
+        }
+
+        if (stuck is not null)
+        {
+            _log?.Invoke($"{stuck}: a display call has not returned in {WorkerLimit.TotalSeconds:0}s; rebinding");
+            Schedule(TimeSpan.Zero);
+        }
+    }
 
     /// <summary>
     /// Ask for a rebind. Requests coalesce: a burst arriving together -- one
@@ -527,6 +601,88 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
     }
 
     /// <summary>
+    /// Choose a display's backend, and take its first reading, without letting
+    /// a call that never returns hold up everything else.
+    ///
+    /// The rebind probes displays one after another and installs none of them
+    /// until every probe is done, so a single wedged I2C or DisplayServices
+    /// call used to leave every dial on every display unbound, and the rebind
+    /// flag set for good -- every later wake and refresh only queued behind it.
+    /// </summary>
+    /// <param name="display">The display to probe.</param>
+    /// <param name="log">Where this attempt's failures go; see <see cref="ChooseBackend"/>.</param>
+    /// <param name="read">Also take the first reading.</param>
+    /// <returns>
+    /// The backend (null when nothing answered), the reading, and whether the
+    /// probe was abandoned still running -- in which case its AV service may
+    /// still be in use and must not be released.
+    /// </returns>
+    private (IMacBrightnessBackend? Backend, int? Reading, bool Abandoned) ProbeBounded(MacDisplay display, Action<string>? log, bool read)
+    {
+        lock (_gate)
+        {
+            if (_stuckProbes.Contains(display.DisplayId))
+            {
+                log?.Invoke($"{display.Name}: an earlier probe has still not returned; not starting another");
+                return (null, null, false);
+            }
+
+            _wedged.RemoveAll(c => c.BusyFor == TimeSpan.Zero);
+            if (_wedged.Any(c => c.DisplayId == display.DisplayId))
+            {
+                log?.Invoke($"{display.Name}: an earlier call into it has still not returned; leaving it until it does");
+                return (null, null, false);
+            }
+        }
+
+        var probe = Task.Run(() =>
+        {
+            var backend = ChooseBackend(display, log);
+            return (backend, read ? backend?.ReadPercent() : null);
+        });
+
+        try
+        {
+            if (probe.Wait(ProbeLimit))
+            {
+                var (backend, reading) = probe.Result;
+                return (backend, reading, false);
+            }
+        }
+        catch (AggregateException ex)
+        {
+            _log?.Invoke($"{display.Name}: probe failed: {ex.GetBaseException().Message}");
+            return (null, null, false);
+        }
+
+        _log?.Invoke($"{display.Name}: probe has not returned after {ProbeLimit.TotalSeconds:0}s; going on without it");
+        lock (_gate)
+        {
+            _stuckProbes.Add(display.DisplayId);
+        }
+
+        // The caller leaves this display's AV service alone, since the stuck
+        // call is still inside it; it is released here, once, when the call
+        // finally returns. The probe's backend is discarded either way.
+        probe.ContinueWith(_ =>
+        {
+            if (display.AvService != IntPtr.Zero)
+            {
+                NativeMethods.CFRelease(display.AvService);
+            }
+
+            lock (_gate)
+            {
+                _stuckProbes.Remove(display.DisplayId);
+            }
+
+            _log?.Invoke($"{display.Name}: the stuck probe finally returned");
+        }, TaskScheduler.Default);
+
+        return (null, null, true);
+    }
+
+    /// <summary>
     /// Whether a retry at this attempt still says anything in the log. The
     /// early ones are the interesting ones: they are what say whether a display
     /// came back by itself after a wake. Once the schedule has settled to its
@@ -559,17 +715,23 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         var adoptedServices = new HashSet<IntPtr>();
         var unreachable = false;
 
+        var abandonedServices = new HashSet<IntPtr>();
+
         foreach (var display in displays)
         {
             // D5: probe once, off the input path, and keep whichever protocol answers.
-            var backend = ChooseBackend(display, _log);
+            var (backend, reading, abandoned) = ProbeBounded(display, _log, read: true);
+            if (abandoned)
+            {
+                abandonedServices.Add(display.AvService);
+            }
+
             if (backend is null)
             {
                 unreachable = true;
                 continue;
             }
 
-            var reading = backend.ReadPercent();
             if (reading is null)
             {
                 _log?.Invoke($"{display.Name}: {backend.Kind} answered the probe but not the read");
@@ -616,8 +778,10 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         }
 
         // Anything a channel adopted is released by that channel instead; releasing
-        // it here would leave the backend writing through a freed object.
-        MacDisplays.Release(displays.Where(d => !adoptedServices.Contains(d.AvService)));
+        // it here would leave the backend writing through a freed object. The
+        // same goes for a service a stuck probe is still inside, which the
+        // probe releases itself when it returns; see ProbeBounded.
+        MacDisplays.Release(displays.Where(d => !adoptedServices.Contains(d.AvService) && !abandonedServices.Contains(d.AvService)));
         MonitorsChanged?.Invoke();
 
         for (var i = 0; i < built.Count; i++)
@@ -704,11 +868,18 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         var displays = MacDisplays.Enumerate(log);
         var answered = false;
         var stillUnreachable = false;
+        var abandonedServices = new HashSet<IntPtr>();
         try
         {
             foreach (var display in displays.Where(d => !bound.Contains(d.Name)))
             {
-                if (ChooseBackend(display, log) is null)
+                var (backend, _, abandoned) = ProbeBounded(display, log, read: false);
+                if (abandoned)
+                {
+                    abandonedServices.Add(display.AvService);
+                }
+
+                if (backend is null)
                 {
                     stillUnreachable = true;
                     continue;
@@ -722,8 +893,9 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         finally
         {
             // Nothing here is adopted: the probe's backend is thrown away and
-            // the rebind that follows makes its own services.
-            MacDisplays.Release(displays);
+            // the rebind that follows makes its own services. A service a stuck
+            // probe is still inside is left alone; see Rebind.
+            MacDisplays.Release(displays.Where(d => !abandonedServices.Contains(d.AvService)));
         }
 
         if (answered)
@@ -752,6 +924,7 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         }
 
         ScheduleRetry(needed: false);
+        _health?.Dispose();
         NativeMethods.CGDisplayRemoveReconfigurationCallback(_onDisplaysChanged, IntPtr.Zero);
         SyncBrightnessObservers([]);
         foreach (var channel in channels)
@@ -780,6 +953,8 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
         private readonly uint _displayId;
         private readonly Action<uint, int>? _observed;
         private int _quietPolls;
+        private long _busySince;    // Stopwatch timestamp the current pass began, which pauses across sleep; 0 while idle
+        private int _reported;
 
         public Channel(string name, uint displayId, IMacBrightnessBackend backend, IntPtr ownedAvService,
                        Action<uint, int>? observed, Action<string>? log)
@@ -809,6 +984,19 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
 
         public int? ReadPercent() => _backend.ReadPercent();
 
+        /// <summary>How long the worker has been inside its current pass; zero while idle.</summary>
+        public TimeSpan BusyFor
+        {
+            get
+            {
+                var since = Interlocked.Read(ref _busySince);
+                return since == 0 ? TimeSpan.Zero : System.Diagnostics.Stopwatch.GetElapsedTime(since);
+            }
+        }
+
+        /// <summary>True the first time only, so one stuck channel asks for one rebind.</summary>
+        public bool MarkReported() => Interlocked.Exchange(ref _reported, 1) == 0;
+
         public DisplayBrightnessSnapshot Snapshot { get; set; } = DisplayBrightnessSnapshot.Unavailable;
 
         public void Request(int percent)
@@ -823,6 +1011,13 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
                 catch (SemaphoreFullException)
                 {
                     // Another request beat us to it; the latest value is already queued.
+                }
+                catch (ObjectDisposedException)
+                {
+                    // A rebind retired this channel between the dial finding it and
+                    // asking it. The turn is lost, which the next one makes good;
+                    // throwing here instead ended the plugin process, since the
+                    // event dispatcher above has no catch.
                 }
             }
         }
@@ -843,65 +1038,104 @@ public sealed class MacDisplayBrightnessService : IDisplayBrightnessService
                     return;
                 }
 
-                // A sleeping panel is left alone entirely. On Windows this
-                // plugin's periodic DDC read kept monitors awake indefinitely;
-                // touching the bus is what does it, so nothing here touches a
-                // display that has gone to sleep.
-                var asleep = NativeMethods.CGDisplayIsAsleep(_displayId);
-
-                var pending = Interlocked.Exchange(ref _requested, -1);
-                if (pending >= 0)
+                // One pass may not end the loop. This worker is the only thing
+                // that applies this display's requests, and nothing restarts it:
+                // an exception out of a backend call or out of a subscriber to
+                // the change it reports used to leave the display taking dial
+                // turns and silently applying none of them until the next rebind.
+                Interlocked.Exchange(ref _busySince, System.Diagnostics.Stopwatch.GetTimestamp());
+                try
                 {
-                    if (asleep)
-                    {
-                        _log?.Invoke($"{Name}: asleep, not applying {pending}%");
-                        continue;
-                    }
-
-                    if (!_backend.WritePercent(pending))
-                    {
-                        _log?.Invoke($"{Name}: {_backend.Kind} refused {pending}%");
-                    }
-
-                    _lastWrite = DateTimeOffset.UtcNow;
-                    continue;
+                    RunOnce();
                 }
-
-                // Idle: re-read, so a change made anywhere else reaches the
-                // strip. A sleeping panel is skipped -- reading a DDC display
-                // costs a bus transaction, and doing that on a schedule is what
-                // kept monitors from ever staying asleep on Windows. Asleep, its
-                // level cannot be changed by anyone either, so there is nothing
-                // to miss.
-                if (asleep || DateTimeOffset.UtcNow - _lastWrite < QuietAfterWrite)
+                catch (Exception ex)
                 {
-                    continue;
+                    _log?.Invoke($"{Name}: worker pass failed, continuing: {ex.Message}");
                 }
-
-                var level = _backend.ReadPercent();
-                if (level is null)
+                finally
                 {
-                    _quietPolls++;
-                    continue;
+                    Interlocked.Exchange(ref _busySince, 0);
                 }
-
-                _quietPolls = 0;
-                _observed?.Invoke(_displayId, level.Value);
             }
+        }
+
+        private void RunOnce()
+        {
+            // A sleeping panel is left alone entirely. On Windows this
+            // plugin's periodic DDC read kept monitors awake indefinitely;
+            // touching the bus is what does it, so nothing here touches a
+            // display that has gone to sleep.
+            var asleep = NativeMethods.CGDisplayIsAsleep(_displayId);
+
+            var pending = Interlocked.Exchange(ref _requested, -1);
+            if (pending >= 0)
+            {
+                if (asleep)
+                {
+                    _log?.Invoke($"{Name}: asleep, not applying {pending}%");
+                    return;
+                }
+
+                if (!_backend.WritePercent(pending))
+                {
+                    _log?.Invoke($"{Name}: {_backend.Kind} refused {pending}%");
+                }
+
+                _lastWrite = DateTimeOffset.UtcNow;
+                return;
+            }
+
+            // Idle: re-read, so a change made anywhere else reaches the
+            // strip. A sleeping panel is skipped -- reading a DDC display
+            // costs a bus transaction, and doing that on a schedule is what
+            // kept monitors from ever staying asleep on Windows. Asleep, its
+            // level cannot be changed by anyone either, so there is nothing
+            // to miss.
+            if (asleep || DateTimeOffset.UtcNow - _lastWrite < QuietAfterWrite)
+            {
+                return;
+            }
+
+            var level = _backend.ReadPercent();
+            if (level is null)
+            {
+                _quietPolls++;
+                return;
+            }
+
+            _quietPolls = 0;
+            _observed?.Invoke(_displayId, level.Value);
         }
 
         public void Dispose()
         {
             _cancellation.Cancel();
+            var stopped = false;
             try
             {
-                _worker.Wait(TimeSpan.FromSeconds(2));
+                stopped = _worker.Wait(TimeSpan.FromSeconds(2));
             }
             catch (AggregateException)
             {
-                // A worker stuck in a native call cannot be interrupted; let it go.
+                stopped = true; // it ended, by faulting
             }
 
+            if (stopped)
+            {
+                ReleaseResources();
+                return;
+            }
+
+            // A worker stuck in a native call cannot be interrupted, and a wait
+            // that timed out is not one that finished: the I2C call it is inside
+            // is writing through the AV service right now. Freeing it here was a
+            // use-after-free. Release only once the worker has really left.
+            _log?.Invoke($"{Name}: worker still inside a display call; releasing it when it returns");
+            _worker.ContinueWith(_ => ReleaseResources(), TaskScheduler.Default);
+        }
+
+        private void ReleaseResources()
+        {
             _cancellation.Dispose();
             _wake.Dispose();
 

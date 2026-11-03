@@ -40,4 +40,26 @@ public class MediaRemoteHostTests
     [Fact]
     public void The_limit_allows_for_more_than_one_missed_tick() =>
         Assert.True(MediaRemoteHost.SilenceLimit >= TimeSpan.FromSeconds(45));
+
+    /// <summary>
+    /// A helper that crashes as it starts ends in a clean end-of-stream, not an
+    /// exception. It must back off all the same, rather than restarting every
+    /// two seconds for as long as whatever crashes it is still playing.
+    /// </summary>
+    [Fact]
+    public void A_helper_that_dies_on_arrival_backs_off_to_the_ceiling()
+    {
+        var delay = TimeSpan.FromSeconds(2);
+        for (var i = 0; i < 10; i++)
+        {
+            delay = MediaRemoteHost.NextRestartDelay(delay, runLength: TimeSpan.FromMilliseconds(50));
+        }
+
+        Assert.Equal(TimeSpan.FromSeconds(30), delay);
+    }
+
+    [Fact]
+    public void A_run_that_lasted_resets_the_backoff() =>
+        Assert.Equal(TimeSpan.FromSeconds(2),
+            MediaRemoteHost.NextRestartDelay(TimeSpan.FromSeconds(30), runLength: TimeSpan.FromMinutes(10)));
 }

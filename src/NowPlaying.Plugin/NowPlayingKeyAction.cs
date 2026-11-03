@@ -12,7 +12,7 @@ namespace NowPlaying.Plugin;
 /// so this key's value is showing what is playing.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.key")]
-public sealed class NowPlayingKeyAction : KeypadBase
+public sealed class NowPlayingKeyAction : SafeKeypadBase
 {
     private const string PressKey = "pressAction";
     private const string LongPressKey = "longPressAction";
@@ -24,6 +24,8 @@ public sealed class NowPlayingKeyAction : KeypadBase
     private static readonly TimeSpan LongPress = TimeSpan.FromMilliseconds(500);
 
     private readonly object _gate = new();
+    private readonly FeedbackPump _pump;
+    private const string ImageEntry = "image";
     private readonly Action<NowPlayingSnapshot> _onSnapshot;
     private readonly Action<Artwork?> _onArtwork;
     private string _pressCommand = "toggle";
@@ -39,16 +41,25 @@ public sealed class NowPlayingKeyAction : KeypadBase
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] key appear: context {connection.ContextId}");
 
+        // The same ordered sender the dials use, so key images cannot land out
+        // of order, a failed one is re-rendered, and a send that never returns
+        // is caught by the pump's hard limit rather than silencing the plugin.
+        _pump = new FeedbackPump("key", Compose, frame => Connection.SetImageAsync((byte[])frame[ImageEntry], null, true));
+
         ApplySettings(payload.Settings, writeBackDefaults: true);
         PropertyInspectorBridge.Attach(connection);
-        _ = connection.GetGlobalSettingsAsync();
+        _ = SendWatchdog.Watch(connection.GetGlobalSettingsAsync(), "global settings request");
 
         _onSnapshot = _ => Refresh();
-        _onArtwork = artwork =>
+        // The event says the artwork changed; what it changed to is read from
+        // the service, never taken from the event. Events are raised outside
+        // the service's lock, so two can arrive out of order, and the cached
+        // payload of the late one would otherwise stay on the dial for good.
+        _onArtwork = _ =>
         {
             lock (_gate)
             {
-                _artwork = artwork;
+                _artwork = MediaHub.CurrentArtwork;
             }
 
             Refresh();
@@ -70,7 +81,7 @@ public sealed class NowPlayingKeyAction : KeypadBase
 
     // -- input --------------------------------------------------------------
 
-    public override void KeyPressed(KeyPayload payload)
+    protected override void OnKeyPressed(KeyPayload payload)
     {
         lock (_gate)
         {
@@ -79,7 +90,7 @@ public sealed class NowPlayingKeyAction : KeypadBase
     }
 
     /// <summary>Everything happens on release so a long press does not also fire the short command.</summary>
-    public override void KeyReleased(KeyPayload payload)
+    protected override void OnKeyReleased(KeyPayload payload)
     {
         string command;
         lock (_gate)
@@ -100,7 +111,7 @@ public sealed class NowPlayingKeyAction : KeypadBase
             Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] key {command}: {(accepted ? "accepted" : "rejected")}");
             if (!accepted)
             {
-                await Connection.ShowAlert();
+                await SendWatchdog.Watch(Connection.ShowAlert(), "alert");
             }
         }
         catch (Exception ex)
@@ -111,62 +122,50 @@ public sealed class NowPlayingKeyAction : KeypadBase
 
     // -- display --------------------------------------------------------------
 
-    public override void OnTick()
+    protected override void OnTickGuarded()
     {
     }
 
-    /// <summary>Re-render the image if anything it depends on changed.</summary>
-    private void Refresh(bool force = false)
+    /// <summary>Re-render the image if anything it depends on changed; see <see cref="FeedbackPump"/>.</summary>
+    private void Refresh(bool force = false) => _pump.Request(force);
+
+    /// <summary>The image to send, or nothing when it would be unchanged. Called by the pump only, one pass at a time.</summary>
+    private Dictionary<string, object> Compose(bool force)
     {
         var snapshot = MediaHub.Current;
-        byte[]? png = null;
-
         lock (_gate)
         {
             var title = _showTitle ? snapshot.Title : "";
             var artist = _showTitle ? snapshot.Artist : "";
             var imageKey = (snapshot.State, _showArt ? _artwork?.Key : null, _showArt, title, artist);
-            if (force || _lastImage != imageKey)
+            if (!force && _lastImage == imageKey)
             {
-                try
-                {
-                    png = ArtRenderer.RenderKey(snapshot.State, _showArt ? _artwork?.Bytes : null, title, artist);
-                    _lastImage = imageKey;
-                }
-                catch (Exception ex)
-                {
-                    Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] key render failed: {ex.Message}");
-                }
+                return [];
             }
-        }
 
-        if (png is not null)
-        {
-            _ = SendImageAsync(png);
-        }
-    }
-
-    private async Task SendImageAsync(byte[] png)
-    {
-        try
-        {
-            await Connection.SetImageAsync(png, null, true);
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] setImage failed: {ex.Message}");
+            try
+            {
+                var png = ArtRenderer.RenderKey(snapshot.State, _showArt ? _artwork?.Bytes : null, title, artist);
+                _lastImage = imageKey;
+                return new Dictionary<string, object> { [ImageEntry] = png };
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] key render failed: {ex.Message}");
+                return [];
+            }
         }
     }
 
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload)
+    protected override void OnReceivedSettings(ReceivedSettingsPayload payload)
     {
         ApplySettings(payload.Settings, writeBackDefaults: false);
         Refresh();
     }
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) =>
+    protected override void OnReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) =>
         MediaHub.SetPreferredAppId(PropertyInspectorBridge.PreferredAppFrom(payload.Settings));
 
     private void ApplySettings(JObject? settings, bool writeBackDefaults)
@@ -186,12 +185,13 @@ public sealed class NowPlayingKeyAction : KeypadBase
             filled[LongPressKey] = _longPressCommand;
             filled[ShowArtKey] = _showArt;
             filled[ShowTitleKey] = _showTitle;
-            _ = Connection.SetSettingsAsync(filled);
+            _ = SendWatchdog.Watch(Connection.SetSettingsAsync(filled), "settings");
         }
     }
 
-    public override void Dispose()
+    protected override void OnDispose()
     {
+        _pump.Stop();
         MediaHub.SnapshotChanged -= _onSnapshot;
         MediaHub.ArtworkChanged -= _onArtwork;
         MediaHub.Detach();

@@ -249,9 +249,10 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
         startInfo.ArgumentList.Add("-e");
         startInfo.ArgumentList.Add(script);
 
+        Process? process = null;
         try
         {
-            using var process = Process.Start(startInfo);
+            process = Process.Start(startInfo);
             if (process is null)
             {
                 return null;
@@ -289,6 +290,29 @@ internal sealed class MusicAppAdapter(Action<string>? log = null)
         {
             log?.Invoke($"Music query error: {ex.Message}");
             return null;
+        }
+        finally
+        {
+            // Giving up on the script is not the same as stopping it. Disposing
+            // the Process object leaves osascript running, still waiting on
+            // Music, and while Music is wedged every poll used to start another
+            // one alongside it.
+            if (process is not null)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (Exception)
+                {
+                    // Gone between the check and the kill, or not ours to kill.
+                }
+
+                process.Dispose();
+            }
         }
     }
 

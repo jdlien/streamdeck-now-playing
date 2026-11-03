@@ -46,8 +46,8 @@ internal static class MediaHub
                 return;
             }
 
-            service.SnapshotChanged += snapshot => SnapshotChanged?.Invoke(snapshot);
-            service.ArtworkChanged += artwork => ArtworkChanged?.Invoke(artwork);
+            service.SnapshotChanged += snapshot => Guard.Raise(SnapshotChanged, snapshot, "MediaHub.SnapshotChanged");
+            service.ArtworkChanged += artwork => Guard.Raise(ArtworkChanged, artwork, "MediaHub.ArtworkChanged");
             _service = service;
 
             _ = service.StartAsync().ContinueWith(

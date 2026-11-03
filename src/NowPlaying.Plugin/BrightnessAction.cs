@@ -13,7 +13,7 @@ namespace NowPlaying.Plugin;
 /// reconnect.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.brightness")]
-public sealed class BrightnessAction : EncoderBase
+public sealed class BrightnessAction : SafeEncoderBase
 {
     private const string LayoutPath = "layouts/brightness.json";
     private const string StepKey = "step";
@@ -23,6 +23,7 @@ public sealed class BrightnessAction : EncoderBase
     private readonly Action<BrightnessState> _onChanged;
     private readonly string _deviceName;
     private readonly Dictionary<bool, string> _tileCache = new();
+    private readonly FeedbackPump _pump;
     private FeedbackFrame? _lastFrame;
     private int _stepPercent = 2;
 
@@ -30,6 +31,7 @@ public sealed class BrightnessAction : EncoderBase
         : base(connection, payload)
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] brightness appear: context {connection.ContextId}");
+        _pump = new FeedbackPump("brightness dial", Compose, frame => Connection.SetFeedbackAsync(FeedbackJson.ToJObject(frame)));
 
         string? deviceType = null;
         try
@@ -44,10 +46,10 @@ public sealed class BrightnessAction : EncoderBase
 
         ApplySettings(payload.Settings, writeBackDefaults: true);
 
-        _onChanged = state => Push(state, full: false);
+        _onChanged = state => Push(full: false);
         BrightnessHub.Changed += _onChanged;
         BrightnessHub.Attach();
-        _ = connection.GetGlobalSettingsAsync();
+        _ = SendWatchdog.Watch(connection.GetGlobalSettingsAsync(), "global settings request");
 
         connection.OnSystemDidWakeUp += (_, _) =>
         {
@@ -58,7 +60,7 @@ public sealed class BrightnessAction : EncoderBase
         {
             Logger.Instance.LogMessage(TracingLevel.INFO, "[action] brightness: re-applying after device connect");
             BrightnessHub.Reapply();
-            Push(BrightnessHub.Current, full: true);
+            Push(full: true);
         };
 
         _ = ApplyLayoutAndPushAsync();
@@ -68,19 +70,19 @@ public sealed class BrightnessAction : EncoderBase
     {
         try
         {
-            await Connection.SetFeedbackLayoutAsync(LayoutPath);
+            await SendWatchdog.Watch(Connection.SetFeedbackLayoutAsync(LayoutPath), "layout");
         }
         catch (Exception ex)
         {
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] brightness setFeedbackLayout failed: {ex.Message}");
         }
 
-        Push(BrightnessHub.Current, full: true);
+        Push(full: true);
     }
 
     // -- input --------------------------------------------------------------
 
-    public override void DialRotate(DialRotatePayload payload)
+    protected override void OnDialRotate(DialRotatePayload payload)
     {
         if (payload.Ticks == 0 || payload.IsDialPressed)
         {
@@ -97,13 +99,13 @@ public sealed class BrightnessAction : EncoderBase
         _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.BrightnessKey, state.Level);
     }
 
-    public override void DialDown(DialPayload payload) => Toggle();
+    protected override void OnDialDown(DialPayload payload) => Toggle();
 
-    public override void DialUp(DialPayload payload)
+    protected override void OnDialUp(DialPayload payload)
     {
     }
 
-    public override void TouchPress(TouchpadPressPayload payload)
+    protected override void OnTouchPress(TouchpadPressPayload payload)
     {
         if (payload.IsLongPress)
         {
@@ -121,26 +123,24 @@ public sealed class BrightnessAction : EncoderBase
 
     // -- display --------------------------------------------------------------
 
-    public override void OnTick()
+    protected override void OnTickGuarded()
     {
     }
 
-    private void Push(BrightnessState state, bool full)
+    /// <summary>Bring the strip up to date; see <see cref="FeedbackPump"/>.</summary>
+    private void Push(bool full) => _pump.Request(full);
+
+    /// <summary>What the strip needs to match the current state. Called by the pump only, one pass at a time.</summary>
+    private Dictionary<string, object> Compose(bool full)
     {
-        Dictionary<string, object> payload;
+        var state = BrightnessHub.Current;
         lock (_gate)
         {
             var frame = BrightnessRenderer.Render(state, _deviceName, TileFor(state.Dimmed));
-            payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
+            var payload = FeedbackRenderer.Diff(full ? null : _lastFrame, frame);
             _lastFrame = frame;
+            return payload;
         }
-
-        if (payload.Count == 0)
-        {
-            return;
-        }
-
-        _ = SendAsync(payload);
     }
 
     /// <summary>The two sun tiles, rendered once each. Call under the gate.</summary>
@@ -155,23 +155,11 @@ public sealed class BrightnessAction : EncoderBase
         return dataUri;
     }
 
-    private async Task SendAsync(Dictionary<string, object> payload)
-    {
-        try
-        {
-            await Connection.SetFeedbackAsync(FeedbackJson.ToJObject(payload));
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] brightness setFeedback failed: {ex.Message}");
-        }
-    }
-
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload) => ApplySettings(payload.Settings, writeBackDefaults: false);
+    protected override void OnReceivedSettings(ReceivedSettingsPayload payload) => ApplySettings(payload.Settings, writeBackDefaults: false);
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) => GlobalSettingsStore.Apply(payload.Settings);
+    protected override void OnReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) => GlobalSettingsStore.Apply(payload.Settings);
 
     private void ApplySettings(JObject? settings, bool writeBackDefaults)
     {
@@ -184,12 +172,13 @@ public sealed class BrightnessAction : EncoderBase
         {
             var filled = settings is null ? new JObject() : (JObject)settings.DeepClone();
             filled[StepKey] = _stepPercent.ToString();
-            _ = Connection.SetSettingsAsync(filled);
+            _ = SendWatchdog.Watch(Connection.SetSettingsAsync(filled), "settings");
         }
     }
 
-    public override void Dispose()
+    protected override void OnDispose()
     {
+        _pump.Stop();
         BrightnessHub.Changed -= _onChanged;
         Logger.Instance.LogMessage(TracingLevel.INFO, "[action] brightness disappear");
     }
