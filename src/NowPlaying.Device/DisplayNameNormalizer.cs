@@ -58,13 +58,26 @@ public static class DisplayNameNormalizer
     /// unlike a display id or a position. When that is not enough (no serial, or
     /// serials ending alike) a position number is added as a last resort.
     /// </summary>
-    public static IReadOnlyList<string> Disambiguate(IReadOnlyList<(string Name, uint Serial)> displays)
+    /// <param name="displays">Each display's tidied name and EDID serial.</param>
+    /// <param name="sharedNames">
+    /// Names that have collided before, compared ignoring case and spacing.
+    /// A name in here keeps its serial even when only one display has it, and
+    /// any collision found now is added. Without this a dial bound to one of
+    /// two displays sharing a model name lost it whenever the other dropped out
+    /// of an enumeration -- unplugged, or simply slow to appear after a wake --
+    /// since the survivor's name went back to the bare model name.
+    /// </param>
+    public static IReadOnlyList<string> Disambiguate(IReadOnlyList<(string Name, uint Serial)> displays, ISet<string>? sharedNames = null)
     {
         var result = displays.Select(d => d.Name).ToArray();
         foreach (var group in displays.Select((d, i) => (d, i)).GroupBy(x => Squashed(x.d.Name), StringComparer.OrdinalIgnoreCase))
         {
             var members = group.ToList();
-            if (members.Count < 2)
+            if (members.Count >= 2)
+            {
+                sharedNames?.Add(group.Key);
+            }
+            else if (sharedNames is null || !sharedNames.Contains(group.Key))
             {
                 continue;
             }

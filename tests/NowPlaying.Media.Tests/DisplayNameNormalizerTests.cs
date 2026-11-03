@@ -4,6 +4,7 @@ using NowPlaying.Plugin;
 
 namespace NowPlaying.Media.Tests;
 
+[Collection(GlobalSettingsCollection.Name)] // DisplayNames is process-wide
 public class DisplayNameNormalizerTests
 {
     [Theory]
@@ -71,7 +72,7 @@ public class DisplayNamesTests
     }
 
     [Fact]
-    public void IdenticalNamesGetTheirSerialSuffix()
+    public void SharedNamesGetTheirSerialSuffix()
     {
         var names = DisplayNameNormalizer.Disambiguate(
             [("Studio Display XDR", 124421315u), ("Studio Display", 763926578u), ("Studio Display", 1171739599u)]);

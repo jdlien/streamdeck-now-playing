@@ -14,7 +14,7 @@ namespace NowPlaying.Plugin;
 /// makes this one dial cover every screen on the desk.
 /// </summary>
 [PluginActionId("com.jdlien.now-playing.display-brightness")]
-public sealed class DisplayBrightnessAction : EncoderBase
+public sealed class DisplayBrightnessAction : SafeEncoderBase
 {
     private const string LayoutPath = "layouts/display-brightness.json";
     private const string MonitorKey = "monitor";
@@ -35,9 +35,28 @@ public sealed class DisplayBrightnessAction : EncoderBase
     private readonly Action<string, DisplayBrightnessSnapshot> _onMonitorChanged;
     private readonly Action _onMonitorsChanged;
     private readonly Action<BrightnessState> _onStreamDeckChanged;
+    private readonly Action _onNamesChanged;
     private readonly Dictionary<string, string> _tileCache = new();
+    private readonly FeedbackPump _pump;
     private readonly string _deviceName;
     private JObject _settings = new();
+    private bool _settingsSeen;
+
+    /// <summary>
+    /// The name box's text for the screen this dial just left, and until when
+    /// an update still carrying it is taken as stale. The correction to the
+    /// box takes a round trip to reach the inspector, and any other control
+    /// changed inside it sends the old text again -- now against an unchanged
+    /// binding, which reads exactly like typing it.
+    ///
+    /// The window is that round trip and little more: milliseconds, with a
+    /// margin. Longer, and it swallowed genuine edits -- clearing the new
+    /// screen's name straight after switching to it was put back -- since a
+    /// person cannot see the corrected box, decide, and edit it this fast.
+    /// </summary>
+    private (string Text, DateTimeOffset Until)? _staleName;
+
+    private static readonly TimeSpan StaleNameWindow = TimeSpan.FromMilliseconds(500);
     private FeedbackFrame? _lastFrame;
     private string? _lastBadge;
     private string _binding = DisplayTargets.Automatic;
@@ -51,6 +70,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
         : base(connection, payload)
     {
         Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness appear: context {connection.ContextId}");
+        _pump = new FeedbackPump("display dial", Compose, frame => Connection.SetFeedbackAsync(FeedbackJson.ToJObject(frame)));
 
         string? deviceType = null;
         try
@@ -63,30 +83,40 @@ public sealed class DisplayBrightnessAction : EncoderBase
 
         _deviceName = BrightnessRenderer.DeviceName(deviceType);
 
-        ApplySettings(payload.Settings, writeBackDefaults: true);
+        ApplySettings(payload.Settings, initial: true);
         PropertyInspectorBridge.Attach(connection);
 
         _onMonitorChanged = (name, _) =>
         {
             if (string.Equals(name, ResolvedTarget(), StringComparison.OrdinalIgnoreCase))
             {
-                Push(Current, full: false);
+                Push(full: false);
             }
         };
-        _onMonitorsChanged = () => Push(Current, full: false);
+        _onMonitorsChanged = () =>
+        {
+            SyncNameBox();
+            Push(full: false);
+        };
         _onStreamDeckChanged = _ =>
         {
             if (ResolvedTarget() == DisplayTargets.StreamDeck)
             {
-                Push(Current, full: false);
+                Push(full: false);
             }
+        };
+        _onNamesChanged = () =>
+        {
+            SyncNameBox();
+            Push(full: false);
         };
         DisplayBrightnessHub.Changed += _onMonitorChanged;
         DisplayBrightnessHub.MonitorsChanged += _onMonitorsChanged;
         BrightnessHub.Changed += _onStreamDeckChanged;
+        DisplayNames.Changed += _onNamesChanged;
         DisplayBrightnessHub.Attach();
         BrightnessHub.Attach();
-        _ = connection.GetGlobalSettingsAsync();
+        _ = SendWatchdog.Watch(connection.GetGlobalSettingsAsync(), "global settings request");
 
         connection.OnSystemDidWakeUp += (_, _) =>
         {
@@ -96,7 +126,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
         connection.OnDeviceDidConnect += (_, _) =>
         {
             BrightnessHub.Reapply();
-            Push(Current, full: true);
+            Push(full: true);
         };
 
         _ = ApplyLayoutAndPushAsync();
@@ -133,7 +163,10 @@ public sealed class DisplayBrightnessAction : EncoderBase
                 return DisplayBrightnessRenderer.FromStreamDeck(BrightnessHub.Current, _deviceName, Math.Max(0, index - 1), count);
             }
 
-            var snapshot = DisplayBrightnessHub.Get(binding);
+            // Ask for the screen the binding resolved to, not the raw binding:
+            // the resolution tolerates a respelled name, and the service's own
+            // lookup does not, so the two could disagree about what is connected.
+            var snapshot = DisplayBrightnessHub.Get(target ?? binding);
             if (!snapshot.Available)
             {
                 return snapshot;
@@ -154,19 +187,19 @@ public sealed class DisplayBrightnessAction : EncoderBase
     {
         try
         {
-            await Connection.SetFeedbackLayoutAsync(LayoutPath);
+            await SendWatchdog.Watch(Connection.SetFeedbackLayoutAsync(LayoutPath), "layout");
         }
         catch (Exception ex)
         {
             Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] display setFeedbackLayout failed: {ex.Message}");
         }
 
-        Push(Current, full: true);
+        Push(full: true);
     }
 
     // -- input --------------------------------------------------------------
 
-    public override void DialRotate(DialRotatePayload payload)
+    protected override void OnDialRotate(DialRotatePayload payload)
     {
         if (payload.Ticks == 0 || payload.IsDialPressed)
         {
@@ -180,26 +213,28 @@ public sealed class DisplayBrightnessAction : EncoderBase
         }
 
         var delta = payload.Ticks * step;
-        if (ResolvedTarget() == DisplayTargets.StreamDeck)
+        var target = ResolvedTarget();
+        if (target == DisplayTargets.StreamDeck)
         {
             var state = BrightnessHub.Adjust(delta);
             _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.BrightnessKey, state.Level);
             return;
         }
 
-        if (!DisplayBrightnessHub.Adjust(BindingSnapshot().Binding, delta))
+        if (target is null || !DisplayBrightnessHub.Adjust(target, delta))
         {
-            _ = Connection.ShowAlert();
+            _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert");
         }
     }
 
-    public override void DialDown(DialPayload payload) => Perform(Gesture(PressKey));
+    protected override void OnDialDown(DialPayload payload) => Perform(Gesture(PressKey), "press");
 
-    public override void DialUp(DialPayload payload)
+    protected override void OnDialUp(DialPayload payload)
     {
     }
 
-    public override void TouchPress(TouchpadPressPayload payload) => Perform(Gesture(payload.IsLongPress ? HoldKey : TapKey));
+    protected override void OnTouchPress(TouchpadPressPayload payload) =>
+        Perform(Gesture(payload.IsLongPress ? HoldKey : TapKey), payload.IsLongPress ? "strip hold" : "strip tap");
 
     private string Gesture(string key)
     {
@@ -214,19 +249,22 @@ public sealed class DisplayBrightnessAction : EncoderBase
         }
     }
 
-    private void Perform(string gesture)
+    /// <param name="gesture">What to do.</param>
+    /// <param name="source">What the user touched, for the log.</param>
+    private void Perform(string gesture, string source)
     {
         switch (gesture)
         {
             case GestureDim:
-                if (ResolvedTarget() == DisplayTargets.StreamDeck)
+                var current = ResolvedTarget();
+                if (current == DisplayTargets.StreamDeck)
                 {
                     var state = BrightnessHub.Toggle();
                     _ = GlobalSettingsStore.SaveAsync(Connection, GlobalSettingsStore.BrightnessKey, state.Level);
                 }
-                else if (!DisplayBrightnessHub.Toggle(BindingSnapshot().Binding))
+                else if (current is null || !DisplayBrightnessHub.Toggle(current))
                 {
-                    _ = Connection.ShowAlert();
+                    _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert");
                 }
 
                 break;
@@ -234,13 +272,18 @@ public sealed class DisplayBrightnessAction : EncoderBase
             case GestureNext:
             case GesturePrevious:
                 var (binding, include) = BindingSnapshot();
+                var from = DisplayTargets.Resolve(binding, DisplayBrightnessHub.MonitorNames, include) ?? binding;
                 var target = DisplayTargets.Neighbor(binding, DisplayBrightnessHub.MonitorNames, include, gesture == GestureNext ? 1 : -1);
                 if (target is null)
                 {
-                    _ = Connection.ShowAlert(); // one target, or none: nothing to move to
+                    _ = SendWatchdog.Watch(Connection.ShowAlert(), "alert"); // one target, or none: nothing to move to
                     return;
                 }
 
+                // Said in full, because a dial that "changed monitor by itself"
+                // has so far always turned out to be a touch on the strip.
+                Logger.Instance.LogMessage(TracingLevel.INFO,
+                    $"[action] display dial {ShortContext}: {source} ({gesture}) moved it from {Describe(from)} to {Describe(target)}");
                 BindTo(target);
                 break;
 
@@ -258,12 +301,30 @@ public sealed class DisplayBrightnessAction : EncoderBase
     private static string? ResolvedPlatformName(string? target) =>
         string.IsNullOrEmpty(target) || target == DisplayTargets.StreamDeck ? null : target;
 
+    /// <summary>A target as the log should name it: the platform's name, plus the custom one when set.</summary>
+    private static string Describe(string? target)
+    {
+        if (string.IsNullOrEmpty(target))
+        {
+            return "automatic";
+        }
+
+        var custom = DisplayNames.CustomFor(ResolvedPlatformName(target));
+        return custom is null ? target : $"{target} (\"{custom}\")";
+    }
+
+    /// <summary>Enough of the context id to tell this deck's dials apart in the log.</summary>
+    private string ShortContext => Connection.ContextId.Length > 6 ? Connection.ContextId[..6] : Connection.ContextId;
+
     /// <summary>Point this dial at a target and remember it in the action's settings.</summary>
     private void BindTo(string target)
     {
         JObject settings;
         lock (_gate)
         {
+            // The inspector, if open, still shows the old screen's name until
+            // the settings below reach it.
+            _staleName = (SettingsReader.GetString(_settings, RenameKey, "").Trim(), DateTimeOffset.UtcNow + StaleNameWindow);
             _binding = target;
             _settings[MonitorKey] = target;
             // Keep the inspector's rename box pointed at the screen now shown,
@@ -272,19 +333,23 @@ public sealed class DisplayBrightnessAction : EncoderBase
             settings = (JObject)_settings.DeepClone();
         }
 
-        Logger.Instance.LogMessage(TracingLevel.INFO, $"[action] display brightness bound to {target}");
-        _ = Connection.SetSettingsAsync(settings);
-        Push(Current, full: false);
+        _ = SendWatchdog.Watch(Connection.SetSettingsAsync(settings), "settings");
+        Push(full: false);
     }
 
     // -- display --------------------------------------------------------------
 
-    public override void OnTick()
+    protected override void OnTickGuarded()
     {
     }
 
-    private void Push(DisplayBrightnessSnapshot snapshot, bool full)
+    /// <summary>Bring the strip up to date; see <see cref="FeedbackPump"/>.</summary>
+    private void Push(bool full) => _pump.Request(full);
+
+    /// <summary>What the strip needs to match the current state. Called by the pump only, one pass at a time.</summary>
+    private Dictionary<string, object> Compose(bool full)
     {
+        var snapshot = Current;
         var isStreamDeck = ResolvedTarget() == DisplayTargets.StreamDeck;
         Dictionary<string, object> payload;
         lock (_gate)
@@ -302,12 +367,7 @@ public sealed class DisplayBrightnessAction : EncoderBase
             }
         }
 
-        if (payload.Count == 0)
-        {
-            return;
-        }
-
-        _ = SendAsync(payload);
+        return payload;
     }
 
     /// <summary>Monitor or sun tile, lit or dimmed, rendered once each. Call under the gate.</summary>
@@ -324,35 +384,55 @@ public sealed class DisplayBrightnessAction : EncoderBase
         return dataUri;
     }
 
-    private async Task SendAsync(Dictionary<string, object> payload)
-    {
-        try
-        {
-            await Connection.SetFeedbackAsync(FeedbackJson.ToJObject(payload));
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.LogMessage(TracingLevel.WARN, $"[action] display setFeedback failed: {ex.Message}");
-        }
-    }
-
     // -- settings and lifetime ------------------------------------------------
 
-    public override void ReceivedSettings(ReceivedSettingsPayload payload)
+    protected override void OnReceivedSettings(ReceivedSettingsPayload payload)
     {
-        ApplySettings(payload.Settings, writeBackDefaults: false);
-        Push(Current, full: false);
+        ApplySettings(payload.Settings, initial: false);
+        Push(full: false);
     }
 
-    public override void ReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload) => GlobalSettingsStore.Apply(payload.Settings);
-
-    private void ApplySettings(JObject? settings, bool writeBackDefaults)
+    protected override void OnReceivedGlobalSettings(ReceivedGlobalSettingsPayload payload)
     {
+        GlobalSettingsStore.Apply(payload.Settings);
+
+        // Even when the names did not change, this is the first moment the box
+        // can be checked against them: the dial's settings arrive first.
+        SyncNameBox();
+        Push(full: false);
+    }
+
+    /// <param name="settings">The dial's settings.</param>
+    /// <param name="initial">
+    /// True for the settings the dial appeared with. Those are what was saved,
+    /// never an edit, and they arrive before the global settings holding the
+    /// names, so nothing in them is applied as a rename.
+    /// </param>
+    private void ApplySettings(JObject? settings, bool initial)
+    {
+        var renameTo = SettingsReader.GetString(settings, RenameKey, "").Trim();
+        string previousBinding, binding;
+        string? previousName;
+        var stale = false;
         lock (_gate)
         {
+            previousBinding = _binding;
+            previousName = _settingsSeen ? SettingsReader.GetString(_settings, RenameKey, "") : null;
+            _settingsSeen = true;
+
+            if (_staleName is { } carried && DateTimeOffset.UtcNow < carried.Until)
+            {
+                stale = string.Equals(carried.Text, renameTo, StringComparison.Ordinal);
+            }
+            else
+            {
+                _staleName = null;
+            }
+
             _settings = settings is null ? new JObject() : (JObject)settings.DeepClone();
             var monitor = SettingsReader.GetString(settings, MonitorKey, PropertyInspectorBridge.AutomaticValue);
             _binding = monitor == PropertyInspectorBridge.AutomaticValue ? DisplayTargets.Automatic : monitor;
+            binding = _binding;
             // The setting is honoured only where the deck's screen can actually be
             // driven; elsewhere the deck never enters the cycle, so a profile
             // synced from Windows cannot offer a target that does nothing.
@@ -364,18 +444,36 @@ public sealed class DisplayBrightnessAction : EncoderBase
             _hold = SettingsReader.GetString(settings, HoldKey, GesturePrevious, Gestures);
         }
 
-        // A rename typed in the inspector applies to the screen this dial is
-        // showing. Written only when it differs from what is stored, so the
-        // settings echo that follows a save does not loop.
-        var renameTo = SettingsReader.GetString(settings, RenameKey, "").Trim();
-        var renameTarget = ResolvedPlatformName(ResolvedTarget());
-        if (renameTarget is not null && renameTo != (DisplayNames.CustomFor(renameTarget) ?? ""))
+        if (!initial && !string.Equals(previousBinding, binding, StringComparison.OrdinalIgnoreCase))
         {
-            _ = DisplayNames.SetAsync(Connection, renameTarget, renameTo);
-            Push(Current, full: false);
+            lock (_gate)
+            {
+                _staleName = (renameTo, DateTimeOffset.UtcNow + StaleNameWindow);
+            }
+
+            Logger.Instance.LogMessage(TracingLevel.INFO,
+                $"[action] display dial {ShortContext}: inspector moved it from {Describe(previousBinding)} to {Describe(binding)}");
         }
 
-        if (writeBackDefaults && SettingsReader.IsMissingAny(settings, MonitorKey, IncludeStreamDeckKey, StepKey, PressKey, TapKey, HoldKey))
+        // A rename typed in the inspector applies to the screen this dial is
+        // showing -- but only an actual edit of the box. Anything else that
+        // carries the box along (the dial's own saved settings, a monitor
+        // picked from the list, the echo of a save) leaves the names alone and
+        // has the box corrected to the screen now shown.
+        var renameTarget = ResolvedPlatformName(ResolvedTarget());
+        if (!initial && !stale && renameTarget is not null && DisplayRename.IsEdit(previousBinding, previousName, binding, renameTo))
+        {
+            if (renameTo != (DisplayNames.CustomFor(renameTarget) ?? ""))
+            {
+                _ = DisplayNames.SetAsync(Connection, renameTarget, renameTo);
+            }
+        }
+        else if (!initial)
+        {
+            SyncNameBox();
+        }
+
+        if (initial && SettingsReader.IsMissingAny(settings, MonitorKey, IncludeStreamDeckKey, StepKey, PressKey, TapKey, HoldKey))
         {
             JObject filled;
             lock (_gate)
@@ -389,15 +487,55 @@ public sealed class DisplayBrightnessAction : EncoderBase
                 filled = (JObject)_settings.DeepClone();
             }
 
-            _ = Connection.SetSettingsAsync(filled);
+            _ = SendWatchdog.Watch(Connection.SetSettingsAsync(filled), "settings");
         }
     }
 
-    public override void Dispose()
+    /// <summary>
+    /// Make the inspector's name box show the custom name of the screen this
+    /// dial is on, so the next edit there lands on the screen the user is
+    /// looking at. Left alone until the names have loaded, and while the dial
+    /// is on nothing (its screen is missing), since there is no right answer
+    /// to show then.
+    /// </summary>
+    private void SyncNameBox()
     {
+        if (!GlobalSettingsStore.IsLoaded)
+        {
+            return;
+        }
+
+        var target = ResolvedTarget();
+        if (target is null)
+        {
+            return;
+        }
+
+        var expected = DisplayNames.CustomFor(ResolvedPlatformName(target)) ?? "";
+        JObject updated;
+        lock (_gate)
+        {
+            // Compared trimmed: names are stored trimmed, and rewriting the box
+            // mid-word would eat the space someone is in the middle of typing.
+            if (!_settingsSeen || SettingsReader.GetString(_settings, RenameKey, "").Trim() == expected)
+            {
+                return;
+            }
+
+            _settings[RenameKey] = expected;
+            updated = (JObject)_settings.DeepClone();
+        }
+
+        _ = SendWatchdog.Watch(Connection.SetSettingsAsync(updated), "settings");
+    }
+
+    protected override void OnDispose()
+    {
+        _pump.Stop();
         DisplayBrightnessHub.Changed -= _onMonitorChanged;
         DisplayBrightnessHub.MonitorsChanged -= _onMonitorsChanged;
         BrightnessHub.Changed -= _onStreamDeckChanged;
+        DisplayNames.Changed -= _onNamesChanged;
         Logger.Instance.LogMessage(TracingLevel.INFO, "[action] display brightness disappear");
     }
 }

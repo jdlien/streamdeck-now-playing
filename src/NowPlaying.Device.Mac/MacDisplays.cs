@@ -37,19 +37,31 @@ internal sealed record MacDisplay(
 [SupportedOSPlatform("macos")]
 internal static class MacDisplays
 {
+    private static readonly object NamesGate = new();
+
+    /// <summary>
+    /// Every panel's name as last read, by EDID product and serial. Dials bind
+    /// by name, so a name that comes and goes takes a dial's monitor with it;
+    /// see <see cref="Enumerate"/>.
+    /// </summary>
+    private static readonly Dictionary<(uint Product, uint Serial), string> KnownNames = [];
+
+    /// <summary>Model names seen on two displays at once; see <see cref="DisplayNameNormalizer.Disambiguate"/>.</summary>
+    private static readonly HashSet<string> SharedNames = new(StringComparer.OrdinalIgnoreCase);
+
     public static IReadOnlyList<MacDisplay> Enumerate(Action<string>? log = null)
     {
-        var framebuffers = FramebuffersByPanel(log);
-        var avServices = AvServicesByFramebuffer(log);
-
         NativeMethods.CGGetOnlineDisplayList(0, null, out var count);
         if (count == 0)
         {
-            return [];
+            return []; // before creating any AV services, which nothing would release
         }
 
         var ids = new uint[count];
         NativeMethods.CGGetOnlineDisplayList(count, ids, out count);
+
+        var framebuffers = FramebuffersByPanel(log);
+        var avServices = AvServicesByFramebuffer(log);
 
         var displays = new List<MacDisplay>();
         foreach (var id in ids.Take((int)count))
@@ -61,19 +73,56 @@ internal static class MacDisplays
             var key = (product, serial);
             framebuffers.TryGetValue(key, out var panel);
 
-            var name = !string.IsNullOrWhiteSpace(panel.Name) ? panel.Name : $"Display {id}";
+            // The registry node carrying the name is not always there to be
+            // read -- just after a wake, mid-reconfiguration -- and a panel
+            // named "Display 3" in one enumeration and "Studio Display XDR"
+            // in the next is, to every dial bound to it, a monitor that left.
+            // So a name once read is kept for that panel.
+            string name;
+            lock (NamesGate)
+            {
+                if (!string.IsNullOrWhiteSpace(panel.Name))
+                {
+                    name = panel.Name;
+                    KnownNames[key] = name;
+                }
+                else if (KnownNames.TryGetValue(key, out var known))
+                {
+                    name = known;
+                    log?.Invoke($"display {id}: no name in the registry right now; keeping \"{known}\"");
+                }
+                else
+                {
+                    name = $"Display {id}";
+                }
+            }
+
             var av = IntPtr.Zero;
             if (!string.IsNullOrEmpty(panel.Framebuffer) && avServices.TryGetValue(panel.Framebuffer, out var service))
             {
                 av = service;
+                avServices.Remove(panel.Framebuffer);
             }
 
             displays.Add(new MacDisplay(id, name, NativeMethods.CGDisplayIsMain(id), vendor, product, serial, av));
         }
 
-        // The name is the key everything else binds to, so identical models
-        // (a 2022 and a 2026 Studio Display) must not share one.
-        var unique = DisplayNameNormalizer.Disambiguate([.. displays.Select(d => (d.Name, d.SerialNumber))]);
+        // AV services for framebuffers no online display claimed. Nothing will
+        // ever release these otherwise, and every rebind makes a fresh set.
+        foreach (var orphan in avServices.Values)
+        {
+            NativeMethods.CFRelease(orphan);
+        }
+
+        // The name is the key everything else binds to, so displays that report
+        // the same model name (a 2022 and a 2026 Studio Display both say
+        // "StudioDisplay") must not share one.
+        IReadOnlyList<string> unique;
+        lock (NamesGate)
+        {
+            unique = DisplayNameNormalizer.Disambiguate([.. displays.Select(d => (d.Name, d.SerialNumber))], SharedNames);
+        }
+
         displays = [.. displays.Select((d, i) => d with { Name = unique[i] })];
 
         // Main display first, matching the Windows service's primary-first order.
